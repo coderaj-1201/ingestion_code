@@ -6,6 +6,9 @@ Dummy values use realistic Azure resource name patterns and valid UUID formats.
 """
 from __future__ import annotations
 
+# Install agent_framework stub before any agent module is imported.
+import tests.conftest_agent_framework  # noqa: F401
+
 import io
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -195,12 +198,14 @@ def mock_openai_client() -> MagicMock:
     chat_resp.choices = [chat_choice]
     client.chat.completions.create.return_value = chat_resp
 
-    # embeddings
-    emb_data = MagicMock()
-    emb_data.embedding = [0.1] * 1536
-    emb_resp = MagicMock()
-    emb_resp.data = [emb_data]
-    client.embeddings.create.return_value = emb_resp
+    # embeddings — side_effect returns one EmbeddingData per text in the input
+    # so zip(batch, resp.data) always produces len(batch) pairs, not just 1.
+    def _embeddings_side_effect(input, model):
+        resp = MagicMock()
+        resp.data = [MagicMock(embedding=[0.1] * 1536) for _ in input]
+        return resp
+
+    client.embeddings.create.side_effect = _embeddings_side_effect
 
     return client
 
