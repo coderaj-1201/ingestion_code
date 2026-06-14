@@ -62,11 +62,15 @@ def parse_pptx(
     chunks: list[RawChunk] = []
 
     for slide_num, slide in enumerate(prs.slides, start=1):
-        slide_title    = ""
-        slide_body     = []
-        parent_id      = str(uuid4())
+        slide_title  = ""
+        slide_body:  list[str] = []
+        parent_id    = str(uuid4())
+        # Collect all child chunks for this slide before appending to `chunks`.
+        # This ensures the parent chunk is always written first (ordering guarantee
+        # required by the embedding agent when it uploads parents before children).
+        slide_chunks: list[RawChunk] = []
 
-        # Extract title and body text
+        # Extract title and body text from shapes
         for shape in slide.shapes:
             if not shape.has_text_frame and not shape.has_table:
                 continue
@@ -79,7 +83,7 @@ def parse_pptx(
                 tbl_md = _table_to_markdown_pptx(shape.table)
                 if tbl_md:
                     nl = _llm_serialise_table(tbl_md, slide_title)
-                    chunks.append(RawChunk(
+                    slide_chunks.append(RawChunk(
                         chunk_id           = str(uuid4()),
                         parent_id          = parent_id,
                         chunk_type         = ChunkType.TABLE,
@@ -105,12 +109,13 @@ def parse_pptx(
                     if text:
                         slide_body.append(text)
 
-        # Parent chunk for this slide — must be appended BEFORE children
         all_text = (slide_title + "\n" + "\n".join(slide_body)).strip()
         if not all_text:
+            # Skip empty slides entirely — do not commit any collected slide_chunks
+            # since their parent would never be written.
             continue
 
-        # Append parent first
+        # Parent first, then all children — ordering is required by the embedding agent.
         chunks.append(RawChunk(
             chunk_id           = parent_id,
             parent_id          = "",
@@ -129,7 +134,9 @@ def parse_pptx(
             content            = all_text,
         ))
 
-        # Then children (title heading + body paragraphs)
+        # Table chunks collected above (they now have a committed parent)
+        chunks.extend(slide_chunks)
+
         if slide_title:
             chunks.append(RawChunk(
                 chunk_id           = str(uuid4()),
@@ -149,7 +156,6 @@ def parse_pptx(
                 content            = slide_title,
             ))
 
-        # Body paragraphs as child chunks
         for body_text in slide_body:
             cleaned = _llm_clean_page(body_text, slide_num)
             if not cleaned:

@@ -1,0 +1,38 @@
+# Web framework
+fastapi
+uvicorn[standard]
+
+# Configuration and validation
+pydantic
+pydantic-settings
+
+# Azure AI
+azure-ai-projects
+openai
+
+# Azure Search
+azure-search-documents
+
+# Azure Storage
+azure-storage-blob
+
+# Azure Service Bus
+azure-servicebus
+
+# Azure Identity (keyless auth + local dev)
+azure-identity
+
+# Document parsing
+pdfplumber
+python-docx
+openpyxl
+python-pptx
+
+# HTTP client (Graph API)
+httpx
+
+# Retry logic for LLM calls
+tenacity
+
+# Optional: Azure Monitor telemetry (set APPLICATIONINSIGHTS_CONNECTION_STRING to activate)
+# azure-monitor-opentelemetry

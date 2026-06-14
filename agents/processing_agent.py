@@ -71,25 +71,41 @@ async def _upload_blob(container: str, blob_path: str, data: bytes) -> None:
 
 async def _sha256_already_indexed(doc_name: str, sha256: str) -> bool:
     """
-    Return True if AI Search already contains at least one chunk for this
-    doc_name with a matching file_sha256.  This is the authoritative dedup
-    gate — even if blob metadata was lost the Search index is the source of
-    truth.
+    Return True if AI Search already contains at least one chunk with this
+    file_sha256. This is the authoritative dedup gate — even if blob metadata
+    was lost, the Search index is the source of truth.
+
+    Filters on file_sha256 only (hex string — no OData injection possible)
+    rather than doc_name, which can contain special characters.
+    Uses the async Search SDK to avoid sharing a sync client across threads.
     """
     if not sha256:
         return False
+
+    # Validate sha256 is a well-formed hex string before embedding in a filter.
+    if not all(c in "0123456789abcdefABCDEF" for c in sha256):
+        logger.warning("Skipping dedup check: malformed sha256 for doc_name=%s", doc_name)
+        return False
+
     try:
-        from shared.azure_clients import get_search_client
-        safe_name = doc_name.replace("'", "''")
-        safe_sha  = sha256.replace("'", "''")
-        results = await asyncio.to_thread(
-            lambda: list(get_search_client().search(
-                search_text="*",
-                filter=f"doc_name eq '{safe_name}' and file_sha256 eq '{safe_sha}'",
-                select=["id"],
-                top=1,
-            ))
-        )
+        from azure.core.credentials import AzureKeyCredential
+        from azure.search.documents.aio import SearchClient as AsyncSearchClient
+        from shared.config import settings
+
+        async with AsyncSearchClient(
+            endpoint=str(settings.AZURE_SEARCH_ENDPOINT),
+            index_name=settings.AZURE_SEARCH_INDEX,
+            credential=AzureKeyCredential(settings.AZURE_SEARCH_API_KEY.get_secret_value()),
+        ) as client:
+            results = [
+                r async for r in await client.search(
+                    search_text="*",
+                    filter=f"file_sha256 eq '{sha256}'",
+                    select=["id"],
+                    top=1,
+                )
+            ]
+
         if results:
             logger.info(
                 "Dedup: doc_name=%s sha256=%s already indexed — skipping",
@@ -98,8 +114,11 @@ async def _sha256_already_indexed(doc_name: str, sha256: str) -> bool:
             return True
         return False
     except Exception as exc:
-        # If the check fails, proceed with processing (safe default)
-        logger.warning("SHA dedup check failed for %s: %s — proceeding", doc_name, exc)
+        # Proceed with processing on any check failure — better to re-process
+        # than to silently skip a file that genuinely needs indexing.
+        logger.warning(
+            "SHA dedup check failed for doc_name=%s — proceeding: %s", doc_name, exc
+        )
         return False
 
 

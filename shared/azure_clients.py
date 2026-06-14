@@ -55,14 +55,20 @@ def get_blob_service_client() -> BlobServiceClient:
     )
 
 
+def _search_credential():
+    # Use Managed Identity in Azure for keyless, auditable access.
+    # Fall back to API key locally where managed identity is not available.
+    if os.getenv("RUNNING_IN_AZURE"):
+        return _credential()
+    return AzureKeyCredential(settings.AZURE_SEARCH_API_KEY.get_secret_value())
+
+
 @lru_cache(maxsize=1)
 def get_search_client() -> SearchClient:
     return SearchClient(
         endpoint=str(settings.AZURE_SEARCH_ENDPOINT),
         index_name=settings.AZURE_SEARCH_INDEX,
-        credential=AzureKeyCredential(
-            settings.AZURE_SEARCH_API_KEY.get_secret_value()
-        ),
+        credential=_search_credential(),
     )
 
 
@@ -70,9 +76,7 @@ def get_search_client() -> SearchClient:
 def get_search_index_client() -> SearchIndexClient:
     return SearchIndexClient(
         endpoint=str(settings.AZURE_SEARCH_ENDPOINT),
-        credential=AzureKeyCredential(
-            settings.AZURE_SEARCH_API_KEY.get_secret_value()
-        ),
+        credential=_search_credential(),
     )
 
 

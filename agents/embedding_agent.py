@@ -130,35 +130,46 @@ async def upload_to_search(embedded: list[tuple[RawChunk, list[float]]], doc_nam
     return total
 
 
+def _odata_str(value: str) -> str:
+    """Wrap a string value for safe use in an OData filter expression."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _check_upload_results(results: list, label: str) -> None:
+    """Raise if any document in an upload batch failed, to prevent silent data loss."""
+    failed = [r for r in results if not r.succeeded]
+    if failed:
+        raise RuntimeError(
+            f"{len(failed)} of {len(results)} documents failed to upload ({label})"
+        )
+
+
 @step
 async def delete_from_search(doc_name: str) -> int:
     """
     Remove all chunks for a document from AI Search.
-    Uses OData filter to find all chunk_ids then batch-deletes.
+    Paginates in batches of 1000 until no results remain — a single top=1000
+    call would silently leave orphans for large documents (>1000 chunks).
     """
     search  = get_search_client()
     deleted = 0
 
-    # Fetch all chunk ids for this doc_name.
-    # Escape single quotes in OData filter to prevent injection.
-    safe_doc_name = doc_name.replace("'", "''")
-    results = await asyncio.to_thread(
-        search.search,
-        search_text="*",
-        filter=f"doc_name eq '{safe_doc_name}'",
-        select=["id"],
-        top=1000,
-    )
-    ids = [r["id"] for r in results]
+    while True:
+        results = await asyncio.to_thread(
+            search.search,
+            search_text="*",
+            filter=f"doc_name eq {_odata_str(doc_name)}",
+            select=["id"],
+            top=1000,
+        )
+        ids = [r["id"] for r in results]
+        if not ids:
+            break
 
-    if not ids:
-        logger.info("No chunks found to delete for doc_name=%s", doc_name)
-        return 0
-
-    for i in range(0, len(ids), _SEARCH_BATCH_SIZE):
-        batch   = [{"id": doc_id} for doc_id in ids[i : i + _SEARCH_BATCH_SIZE]]
-        result  = await asyncio.to_thread(search.delete_documents, batch)
-        deleted += sum(1 for r in result if r.succeeded)
+        for i in range(0, len(ids), _SEARCH_BATCH_SIZE):
+            batch  = [{"id": doc_id} for doc_id in ids[i : i + _SEARCH_BATCH_SIZE]]
+            result = await asyncio.to_thread(search.delete_documents, batch)
+            deleted += sum(1 for r in result if r.succeeded)
 
     logger.info("Deleted %d chunks for doc_name=%s", deleted, doc_name)
     return deleted
@@ -209,9 +220,14 @@ async def embedding_workflow(task: dict) -> dict:
         doc["content_vector"] = []   # empty — parents not vector-searched
         parent_docs.append(doc)
 
-    # Upload parents first (children reference them via parent_id)
+    # Upload parents first — children reference them via parent_id, so a failed
+    # parent upload would leave the index in an inconsistent state. Raise here
+    # so the Service Bus message is abandoned and retried rather than completed.
     if parent_docs:
-        await asyncio.to_thread(get_search_client().upload_documents, parent_docs)
+        parent_results = await asyncio.to_thread(
+            get_search_client().upload_documents, parent_docs
+        )
+        _check_upload_results(parent_results, f"parent chunks for {doc_name}")
         logger.debug("Uploaded %d parent chunks for doc_name=%s", len(parent_docs), doc_name)
 
     # Upload embedded children

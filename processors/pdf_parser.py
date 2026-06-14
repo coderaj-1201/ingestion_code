@@ -35,6 +35,12 @@ from typing import Optional
 from uuid import uuid4
 
 import pdfplumber
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from shared.azure_clients import get_openai_client
 from shared.config import settings
@@ -42,14 +48,33 @@ from shared.models import ChunkType, RawChunk
 
 logger = logging.getLogger(__name__)
 
+# Retry policy for transient LLM errors (rate limits, 5xx).
+# 4xx errors (bad request, content filter) are not retried — they won't recover.
+def _is_retryable_llm_error(exc: BaseException) -> bool:
+    from openai import APIStatusError, RateLimitError
+    if isinstance(exc, RateLimitError):
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code >= 500
+    return False
+
+_LLM_RETRY = retry(
+    retry=retry_if_exception(_is_retryable_llm_error),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    stop=stop_after_attempt(4),
+    reraise=True,
+)
+
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
+@_LLM_RETRY
 def _llm_clean_page(raw_text: str, page_num: int) -> str:
     """
     Light LLM pass: fix broken hyphenation, remove artefacts,
     normalise whitespace. Returns cleaned text.
-    Skips LLM if page is very short (not worth the call).
+    Skips LLM call if page is very short (not worth the latency).
+    Falls back to raw text if the LLM returns no content (e.g. content filter).
     """
     text = raw_text.strip()
     if len(text) < 40:
@@ -71,14 +96,18 @@ def _llm_clean_page(raw_text: str, page_num: int) -> str:
         ],
         temperature=0,
         max_tokens=1500,
+        timeout=30,
     )
-    return resp.choices[0].message.content.strip()
+    content = resp.choices[0].message.content
+    return content.strip() if content else text
 
 
+@_LLM_RETRY
 def _llm_serialise_table(table_markdown: str, context_heading: str) -> str:
     """
     Convert a markdown table to natural language for embedding.
     Original markdown is preserved separately as table_raw.
+    Returns empty string if input is empty or LLM returns no content.
     """
     if not table_markdown.strip():
         return ""
@@ -102,8 +131,10 @@ def _llm_serialise_table(table_markdown: str, context_heading: str) -> str:
         ],
         temperature=0,
         max_tokens=400,
+        timeout=30,
     )
-    return resp.choices[0].message.content.strip()
+    content = resp.choices[0].message.content
+    return content.strip() if content else ""
 
 
 # ── Table extraction via pdfplumber ───────────────────────────────────────────
