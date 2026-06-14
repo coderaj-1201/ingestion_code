@@ -49,6 +49,7 @@ from shared.models import (
 )
 from shared.service_bus import send_to_queue
 from processors.dispatcher import SUPPORTED_EXTENSIONS as _SUPPORTED_EXTENSIONS
+from shared.models import LogicAppIngestRequest
 
 configure_logging("rag-ingestion")
 logger = get_logger(__name__)
@@ -319,6 +320,139 @@ app = FastAPI(title="RAG Ingestion Agent", lifespan=lifespan)
 async def health() -> dict:
     return {"status": "healthy", "agent": "ingestion"}
 
+
+@app.post("/ingest/from-logic-app")
+async def ingest_from_logic_app(
+    req: LogicAppIngestRequest,
+    request: Request,
+) -> dict:
+    """
+    Receive a file from an Azure Logic App and queue it for processing.
+
+    The Logic App handles all SharePoint connectivity (auth, change detection,
+    file download). This endpoint is the single hand-off point: it validates
+    the shared secret, computes SHA-256 for dedup, uploads raw bytes to Blob,
+    and sends a ProcessingTask to the Service Bus processing queue.
+
+    Authentication
+    --------------
+    The Logic App must set the X-Logic-App-Secret header to the value of
+    LOGIC_APP_WEBHOOK_SECRET. Requests without or with a wrong secret are
+    rejected with 401.
+
+    Delete flow
+    -----------
+    When is_delete=True the file_content_base64 field is ignored. The endpoint
+    directly queues a delete ProcessingTask so the downstream agents can remove
+    the document from AI Search.
+    """
+    # ── Auth: validate shared secret ─────────────────────────────────────────
+    if not settings.LOGIC_APP_WEBHOOK_SECRET:
+        logger.error(
+            "LOGIC_APP_WEBHOOK_SECRET is not configured — rejecting Logic App request"
+        )
+        raise HTTPException(status_code=503, detail="Logic App integration not configured")
+
+    incoming_secret = request.headers.get("X-Logic-App-Secret", "")
+    if incoming_secret != settings.LOGIC_APP_WEBHOOK_SECRET.get_secret_value():
+        logger.warning(
+            "Logic App request with invalid secret for doc_name=%s", req.doc_name
+        )
+        raise HTTPException(status_code=401, detail="Invalid secret")
+
+    # ── Extension guard ───────────────────────────────────────────────────────
+    ext = "." + req.doc_name.lower().rsplit(".", 1)[-1] if "." in req.doc_name else ""
+    if ext not in _SUPPORTED_EXTENSIONS:
+        logger.info(
+            "Skipping unsupported file type doc_name=%s ext=%s", req.doc_name, ext
+        )
+        return {"status": "skipped", "reason": "unsupported_extension", "doc_name": req.doc_name}
+
+    task_id   = str(__import__("uuid").uuid4())
+    blob_path = f"{req.domain}/{req.doc_name}"
+
+    logger.info(
+        "Logic App ingest doc_name=%s domain=%s is_delete=%s",
+        req.doc_name, req.domain, req.is_delete,
+        extra={"task_id": task_id, "doc_name": req.doc_name, "domain": req.domain},
+    )
+
+    # ── Delete path ───────────────────────────────────────────────────────────
+    if req.is_delete:
+        processing_task = ProcessingTask(
+            task_id    = task_id,
+            domain     = req.domain,
+            doc_name   = req.doc_name,
+            doc_url    = req.doc_url,
+            file_type  = req.file_type,
+            is_delete  = True,
+        )
+        await send_to_queue(
+            settings.SB_QUEUE_PROCESSING,
+            asdict(processing_task),
+            correlation_id=task_id,
+        )
+        logger.info(
+            "Queued delete task for doc_name=%s",
+            req.doc_name,
+            extra={"task_id": task_id, "doc_name": req.doc_name},
+        )
+        return {"status": "delete_queued", "doc_name": req.doc_name, "task_id": task_id}
+
+    # ── Upsert path ───────────────────────────────────────────────────────────
+    if not req.file_content_base64:
+        raise HTTPException(status_code=400, detail="file_content_base64 is required for non-delete requests")
+
+    import base64
+    try:
+        file_bytes = base64.b64decode(req.file_content_base64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="file_content_base64 is not valid base64")
+
+    new_sha      = _sha256_hex(file_bytes)
+    existing_sha = await _blob_sha256(blob_path)
+
+    if existing_sha and existing_sha == new_sha:
+        logger.info(
+            "Skipping unchanged doc_name=%s sha256=%s (blob tag match)",
+            req.doc_name, new_sha[:12],
+            extra={"task_id": task_id, "doc_name": req.doc_name, "skip_reason": "sha256_match"},
+        )
+        return {"status": "skipped", "reason": "unchanged", "doc_name": req.doc_name}
+
+    await _upload_to_blob_with_sha(blob_path, file_bytes, new_sha)
+
+    processing_task = ProcessingTask(
+        task_id     = task_id,
+        domain      = req.domain,
+        doc_name    = req.doc_name,
+        doc_url     = req.doc_url,
+        file_type   = req.file_type,
+        file_sha256 = new_sha,
+    )
+    await send_to_queue(
+        settings.SB_QUEUE_PROCESSING,
+        asdict(processing_task),
+        correlation_id=task_id,
+    )
+    logger.info(
+        "Queued processing task doc_name=%s sha256=%s",
+        req.doc_name, new_sha[:12],
+        extra={"task_id": task_id, "doc_name": req.doc_name},
+    )
+    return {
+        "status":   "queued",
+        "doc_name": req.doc_name,
+        "task_id":  task_id,
+        "sha256":   new_sha[:12],
+    }
+
+
+# ── Legacy SharePoint webhook endpoints (kept for backwards compatibility) ────
+# These endpoints rely on the Microsoft Graph client (shared/graph_client.py).
+# They are superseded by the Logic Apps path above. Once all SharePoint sites
+# are covered by Logic App workflows, these endpoints and graph_client.py can
+# be removed.
 
 @app.post("/webhook/sharepoint")
 async def sharepoint_webhook(

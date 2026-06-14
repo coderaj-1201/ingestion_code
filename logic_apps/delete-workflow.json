@@ -1,0 +1,104 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+
+  "_comment": [
+    "Logic App Standard workflow — SharePoint file deletion → Ingestion Agent.",
+    "",
+    "What this does:",
+    "  1. Triggers when a file is deleted from the configured SharePoint folder.",
+    "  2. POSTs a delete signal to /ingest/from-logic-app (is_delete=true).",
+    "     The Ingestion Agent queues a delete ProcessingTask, which the",
+    "     Processing Agent forwards to the Embedding Agent for AI Search cleanup.",
+    "",
+    "Note: the 'When a file is deleted' trigger requires the SharePoint folder ID,",
+    "not a path string. Find it by browsing the SharePoint connector in the",
+    "Logic App designer and selecting the folder interactively, or look it up via",
+    "the Graph API:  GET /sites/{site-id}/drive/root/children",
+    "",
+    "Parameters — same as upsert-workflow.json:",
+    "  sharepointSiteUrl, sharepointFolder, domain, ingestionAgentUrl, logicAppSecret"
+  ],
+
+  "parameters": {
+    "$connections": {
+      "defaultValue": {},
+      "type": "Object"
+    },
+    "sharepointSiteUrl": {
+      "defaultValue": "https://<tenant>.sharepoint.com/sites/<site>",
+      "type": "String"
+    },
+    "sharepointFolder": {
+      "defaultValue": "Shared Documents",
+      "type": "String"
+    },
+    "domain": {
+      "defaultValue": "hr",
+      "type": "String"
+    },
+    "ingestionAgentUrl": {
+      "defaultValue": "https://<ingestion-agent-url>",
+      "type": "String"
+    },
+    "logicAppSecret": {
+      "defaultValue": "",
+      "type": "SecureString"
+    }
+  },
+
+  "triggers": {
+    "When_a_file_is_deleted": {
+      "type": "ApiConnection",
+      "recurrence": {
+        "frequency": "Minute",
+        "interval": 5
+      },
+      "splitOn": "@triggerBody()",
+      "inputs": {
+        "host": {
+          "connection": {
+            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+          }
+        },
+        "method": "get",
+        "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/triggers/ondeletedfile",
+        "queries": {
+          "folderId": "@parameters('sharepointFolder')"
+        }
+      }
+    }
+  },
+
+  "actions": {
+
+    "Send_delete_to_Ingestion_Agent": {
+      "type": "Http",
+      "runAfter": {},
+      "inputs": {
+        "method": "POST",
+        "uri": "@{parameters('ingestionAgentUrl')}/ingest/from-logic-app",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Logic-App-Secret": "@parameters('logicAppSecret')"
+        },
+        "body": {
+          "doc_name": "@triggerBody()?['Name']",
+          "doc_url": "@triggerBody()?['Path']",
+          "domain": "@parameters('domain')",
+          "file_type": "@{last(split(triggerBody()?['Name'], '.'))}",
+          "file_content_base64": "",
+          "is_delete": true
+        },
+        "retryPolicy": {
+          "type": "exponential",
+          "count": 4,
+          "interval": "PT10S",
+          "minimumInterval": "PT10S",
+          "maximumInterval": "PT1H"
+        }
+      }
+    }
+
+  }
+}

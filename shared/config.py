@@ -43,18 +43,27 @@ class Settings(BaseSettings):
     SB_QUEUE_PROCESSING: str                = "processing-queue"
     SB_QUEUE_EMBEDDING: str                 = "embedding-queue"
     
-    # ── Microsoft Graph / SharePoint ──────────────────────────────────────────
-    SHAREPOINT_TENANT_ID: str
-    SHAREPOINT_CLIENT_ID: str
-    SHAREPOINT_CLIENT_SECRET: SecretStr
+    # ── Logic Apps integration ────────────────────────────────────────────────
+    # Shared secret placed in the X-Logic-App-Secret header by every Logic App
+    # workflow before calling POST /ingest/from-logic-app.
+    # Generate a strong random value (e.g. openssl rand -hex 32) and set the
+    # same value in the Logic App parameter store and here.
+    LOGIC_APP_WEBHOOK_SECRET: SecretStr | None = None
+
+    # ── Microsoft Graph / SharePoint (legacy — used only by /ingest/folder) ──
+    # These are no longer required when Logic Apps handles SharePoint connectivity.
+    # Leave them unset if you have fully migrated to the Logic Apps path.
+    SHAREPOINT_TENANT_ID: str               = ""
+    SHAREPOINT_CLIENT_ID: str               = ""
+    SHAREPOINT_CLIENT_SECRET: SecretStr | None = None
     SHAREPOINT_WEBHOOK_SECRET: str          = "changeme"
- 
+
     # Comma-separated SharePoint site URLs → resolved to site_id + drive_id at startup.
     # Format: https://<tenant>.sharepoint.com/sites/<site1>,https://<tenant>.sharepoint.com/sites/<site2>
     # Each URL maps to a domain via SITE_DOMAIN_MAP (site-url:domain,...)
     # Never store site_id or drive_id directly — resolve them from URLs at runtime.
     SHAREPOINT_SITE_URLS: str               = ""
- 
+
     # Comma-separated site-url:domain pairs.
     # Example: https://ironman.sharepoint.com/sites/HR:hr,https://ironman.sharepoint.com/sites/Legal:legal
     # The site URL here must match exactly what's in SHAREPOINT_SITE_URLS.

@@ -159,3 +159,28 @@ class IngestStatusResponse(BaseModel):
     task_id: str
     status: str
     message: str = ""
+
+
+class LogicAppIngestRequest(BaseModel):
+    """
+    POST /ingest/from-logic-app
+
+    Sent by an Azure Logic App after it retrieves a file from SharePoint.
+    The Logic App handles all SharePoint auth and change detection; this agent
+    only needs the file bytes and enough metadata to build a ProcessingTask.
+
+    Fields
+    ------
+    doc_name            : file name as it appears in SharePoint (e.g. "Leave Policy 2024.pdf")
+    doc_url             : full SharePoint URL to the file (used as doc_url in AI Search)
+    domain              : business domain — must match a Domain enum value (hr, legal, it, ops)
+    file_type           : lowercase extension without dot (pdf, docx, xlsx, pptx)
+    file_content_base64 : base-64 encoded raw file bytes (set by Logic App "Get file content" action)
+    is_delete           : True when the Logic App "When a file is deleted" trigger fires
+    """
+    doc_name: str
+    doc_url: str
+    domain: str
+    file_type: str
+    file_content_base64: str = ""   # empty on delete
+    is_delete: bool = False

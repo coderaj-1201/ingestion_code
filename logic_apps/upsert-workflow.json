@@ -1,0 +1,170 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+
+  "_comment": [
+    "Logic App Standard workflow — SharePoint file upsert → Ingestion Agent.",
+    "",
+    "What this does:",
+    "  1. Polls SharePoint every 5 minutes for new or modified files.",
+    "  2. Downloads the file content (base64 encoded by Logic Apps automatically).",
+    "  3. POSTs to the Ingestion Agent /ingest/from-logic-app endpoint.",
+    "     The agent handles SHA-256 dedup, Blob upload, and Service Bus queuing.",
+    "",
+    "Parameters to set before deploying (Logic App → Parameters blade):",
+    "  sharepointSiteUrl   : https://<tenant>.sharepoint.com/sites/<site>",
+    "  sharepointFolder    : Shared Documents   (or subfolder, e.g. Shared Documents/HR)",
+    "  domain              : hr  (or legal / it / ops — must match your Domain enum)",
+    "  ingestionAgentUrl   : https://<your-aca-ingestion-agent>.azurecontainerapps.io",
+    "  logicAppSecret      : <same value as LOGIC_APP_WEBHOOK_SECRET in .env>",
+    "",
+    "Connections required:",
+    "  sharepointonline    : SharePoint Online managed connector",
+    "                        Authenticate with a service account or managed identity.",
+    "                        Grant the identity 'Sites.Read.All' in Entra ID.",
+    "",
+    "Deployment:",
+    "  az logicapp workflow create \\",
+    "    --name upsert-workflow \\",
+    "    --logic-app-name <your-logic-app> \\",
+    "    --resource-group <rg> \\",
+    "    --definition @logic_apps/upsert-workflow.json"
+  ],
+
+  "parameters": {
+    "$connections": {
+      "defaultValue": {},
+      "type": "Object"
+    },
+    "sharepointSiteUrl": {
+      "defaultValue": "https://<tenant>.sharepoint.com/sites/<site>",
+      "type": "String"
+    },
+    "sharepointFolder": {
+      "defaultValue": "Shared Documents",
+      "type": "String"
+    },
+    "domain": {
+      "defaultValue": "hr",
+      "type": "String"
+    },
+    "ingestionAgentUrl": {
+      "defaultValue": "https://<ingestion-agent-url>",
+      "type": "String"
+    },
+    "logicAppSecret": {
+      "defaultValue": "",
+      "type": "SecureString"
+    }
+  },
+
+  "triggers": {
+    "When_a_file_is_created_or_modified": {
+      "type": "ApiConnection",
+      "recurrence": {
+        "frequency": "Minute",
+        "interval": 5
+      },
+      "splitOn": "@triggerBody()",
+      "inputs": {
+        "host": {
+          "connection": {
+            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+          }
+        },
+        "method": "get",
+        "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/triggers/onupdatedfile",
+        "queries": {
+          "folderId": "@parameters('sharepointFolder')",
+          "includeFileContent": false,
+          "inferContentType": true
+        }
+      }
+    }
+  },
+
+  "actions": {
+
+    "Get_file_content": {
+      "type": "ApiConnection",
+      "runAfter": {},
+      "inputs": {
+        "host": {
+          "connection": {
+            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+          }
+        },
+        "method": "get",
+        "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/files/@{encodeURIComponent(triggerBody()?['Id'])}/content",
+        "queries": {
+          "inferContentType": false
+        }
+      }
+    },
+
+    "Send_to_Ingestion_Agent": {
+      "type": "Http",
+      "runAfter": {
+        "Get_file_content": ["Succeeded"]
+      },
+      "inputs": {
+        "method": "POST",
+        "uri": "@{parameters('ingestionAgentUrl')}/ingest/from-logic-app",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Logic-App-Secret": "@parameters('logicAppSecret')"
+        },
+        "body": {
+          "doc_name": "@triggerBody()?['Name']",
+          "doc_url": "@triggerBody()?['Path']",
+          "domain": "@parameters('domain')",
+          "file_type": "@{last(split(triggerBody()?['Name'], '.'))}",
+          "file_content_base64": "@{base64(body('Get_file_content'))}",
+          "is_delete": false
+        },
+        "retryPolicy": {
+          "type": "exponential",
+          "count": 4,
+          "interval": "PT10S",
+          "minimumInterval": "PT10S",
+          "maximumInterval": "PT1H"
+        }
+      }
+    },
+
+    "Check_response": {
+      "type": "If",
+      "runAfter": {
+        "Send_to_Ingestion_Agent": ["Succeeded"]
+      },
+      "expression": {
+        "and": [
+          {
+            "not": {
+              "equals": [
+                "@outputs('Send_to_Ingestion_Agent')['statusCode']",
+                200
+              ]
+            }
+          }
+        ]
+      },
+      "actions": {
+        "Terminate_with_error": {
+          "type": "Terminate",
+          "inputs": {
+            "runStatus": "Failed",
+            "runError": {
+              "code": "@{outputs('Send_to_Ingestion_Agent')['statusCode']}",
+              "message": "Ingestion Agent returned non-200: @{body('Send_to_Ingestion_Agent')}"
+            }
+          }
+        }
+      },
+      "else": {
+        "actions": {}
+      }
+    }
+
+  }
+}
