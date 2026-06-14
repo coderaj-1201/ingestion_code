@@ -8,10 +8,21 @@ from datetime import datetime, timezone
 
 
 class StructuredFormatter(logging.Formatter):
+    """
+    Emits one JSON object per log line.
+    All fields are accessed by name in consumers (e.g. customDimensions.service in KQL)
+    so adding new fields here is non-breaking.
+    """
+
+    def __init__(self, service_name: str = "") -> None:
+        super().__init__()
+        self._service_name = service_name
+
     def format(self, record: logging.LogRecord) -> str:
         obj = {
             "time":    datetime.now(timezone.utc).isoformat(),
             "level":   record.levelname,
+            "service": self._service_name,
             "logger":  record.name,
             "msg":     record.getMessage(),
         }
@@ -27,7 +38,7 @@ def configure_logging(service_name: str = "ingestion") -> None:
     from shared.config import settings
     level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(StructuredFormatter())
+    handler.setFormatter(StructuredFormatter(service_name))
     root = logging.getLogger()
     root.setLevel(level)
     root.handlers.clear()
@@ -42,7 +53,11 @@ def configure_logging(service_name: str = "ingestion") -> None:
                 service_name=service_name,
             )
         except ImportError:
-            pass
+            logging.getLogger(__name__).warning(
+                "APPLICATIONINSIGHTS_CONNECTION_STRING is set but azure-monitor-opentelemetry "
+                "is not installed — telemetry disabled. "
+                "Run: pip install azure-monitor-opentelemetry"
+            )
 
 
 def get_logger(name: str) -> logging.Logger:

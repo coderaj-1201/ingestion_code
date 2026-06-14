@@ -30,6 +30,9 @@ _EXT_TO_FILETYPE = {
     ".ppt":  FileType.PPTX,
 }
 
+# Single source of truth for supported extensions — imported by ingestion_agent.
+SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(_EXT_TO_FILETYPE)
+
 
 def detect_file_type(doc_name: str, mime_type: str = "") -> FileType | None:
     """Detect file type from MIME or extension."""

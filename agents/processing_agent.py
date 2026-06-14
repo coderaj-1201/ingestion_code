@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 
@@ -189,7 +190,13 @@ async def processing_workflow(task: ProcessingTask) -> dict:
         await queue_embedding_task(task, "", 0)
         return {"status": "delete_forwarded", "doc_name": task.doc_name}
 
+    t_download = time.monotonic()
     file_bytes = await download_raw_file(task)
+    logger.info(
+        "Downloaded doc_name=%s in %.1fs",
+        task.doc_name, time.monotonic() - t_download,
+        extra={"task_id": task.task_id, "doc_name": task.doc_name},
+    )
 
     # ── Authoritative dedup gate: check AI Search before parsing ─────────────
     if await _sha256_already_indexed(task.doc_name, task.file_sha256):
@@ -200,8 +207,22 @@ async def processing_workflow(task: ProcessingTask) -> dict:
             "chunk_count": 0,
         }
 
-    chunks              = await run_parser(file_bytes, task)
+    t_parse = time.monotonic()
+    chunks  = await run_parser(file_bytes, task)
+    logger.info(
+        "Parsed doc_name=%s in %.1fs chunks=%d",
+        task.doc_name, time.monotonic() - t_parse, len(chunks),
+        extra={"task_id": task.task_id, "doc_name": task.doc_name, "chunk_count": len(chunks)},
+    )
+
+    t_upload            = time.monotonic()
     processed_blob_path = await upload_processed_chunks(chunks, task)
+    logger.info(
+        "Uploaded chunks doc_name=%s in %.1fs",
+        task.doc_name, time.monotonic() - t_upload,
+        extra={"task_id": task.task_id, "doc_name": task.doc_name},
+    )
+
     await queue_embedding_task(task, processed_blob_path, len(chunks))
 
     return {
@@ -250,7 +271,14 @@ async def _sb_listener():
                             logger.info("Processed: %s", result)
                             await receiver.complete_message(msg)
                         except Exception as exc:
-                            logger.error("Processing failed: %s", exc, exc_info=True)
+                            # payload may not be defined if json.loads itself failed
+                            doc_name = payload.get("doc_name", "unknown") if "payload" in locals() else "unknown"
+                            task_id  = payload.get("task_id",  "")        if "payload" in locals() else ""
+                            domain   = payload.get("domain",   "")        if "payload" in locals() else ""
+                            logger.error(
+                                "Processing failed doc_name=%s: %s", doc_name, exc, exc_info=True,
+                                extra={"task_id": task_id, "doc_name": doc_name, "domain": domain},
+                            )
                             await receiver.abandon_message(msg)
         except Exception as exc:
             logger.error("SB listener crashed, restarting in 5s: %s", exc, exc_info=True)

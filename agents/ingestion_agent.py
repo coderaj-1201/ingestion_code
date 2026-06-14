@@ -48,11 +48,10 @@ from shared.models import (
     WebhookNotification,
 )
 from shared.service_bus import send_to_queue
+from processors.dispatcher import SUPPORTED_EXTENSIONS as _SUPPORTED_EXTENSIONS
 
 configure_logging("rag-ingestion")
 logger = get_logger(__name__)
-
-_SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"}
 
 # Persisted delta tokens per (site_id, drive_id) — in production store in Azure Table Storage
 _delta_tokens: dict[str, str] = {}

@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 
@@ -40,8 +41,9 @@ from shared.models import RawChunk
 configure_logging("rag-embedding")
 logger = get_logger(__name__)
 
-_EMBED_BATCH_SIZE  = 16    # embed this many texts per OpenAI call
-_SEARCH_BATCH_SIZE = 100   # upload this many docs per Search call
+_EMBED_BATCH_SIZE      = 16    # embed this many texts per OpenAI call
+_SEARCH_BATCH_SIZE     = 100   # upload this many docs per Search call
+_DELETE_MAX_ITERATIONS = 50    # safety cap for delete pagination (50 × 1000 = 50k chunks max)
 
 
 # ── Blob helper ───────────────────────────────────────────────────────────────
@@ -150,11 +152,13 @@ async def delete_from_search(doc_name: str) -> int:
     Remove all chunks for a document from AI Search.
     Paginates in batches of 1000 until no results remain — a single top=1000
     call would silently leave orphans for large documents (>1000 chunks).
+    Capped at _DELETE_MAX_ITERATIONS as a safety guard against infinite loops
+    if Search returns stale results after a delete.
     """
     search  = get_search_client()
     deleted = 0
 
-    while True:
+    for _iteration in range(_DELETE_MAX_ITERATIONS):
         results = await asyncio.to_thread(
             search.search,
             search_text="*",
@@ -170,6 +174,12 @@ async def delete_from_search(doc_name: str) -> int:
             batch  = [{"id": doc_id} for doc_id in ids[i : i + _SEARCH_BATCH_SIZE]]
             result = await asyncio.to_thread(search.delete_documents, batch)
             deleted += sum(1 for r in result if r.succeeded)
+    else:
+        logger.warning(
+            "delete_from_search hit iteration cap (%d) for doc_name=%s — "
+            "%d chunks deleted, index may still have orphans",
+            _DELETE_MAX_ITERATIONS, doc_name, deleted,
+        )
 
     logger.info("Deleted %d chunks for doc_name=%s", deleted, doc_name)
     return deleted
@@ -211,7 +221,13 @@ async def embedding_workflow(task: dict) -> dict:
     )
 
     # Embed children
+    t_embed           = time.monotonic()
     embedded_children = await embed_chunks(child_chunks)
+    logger.info(
+        "Embedded %d child chunks for doc_name=%s in %.1fs",
+        len(child_chunks), doc_name, time.monotonic() - t_embed,
+        extra={"doc_name": doc_name, "task_id": task.get("task_id")},
+    )
 
     # Also store parents in Search (no vector — used for context retrieval by parent_id)
     parent_docs = []
@@ -231,7 +247,13 @@ async def embedding_workflow(task: dict) -> dict:
         logger.debug("Uploaded %d parent chunks for doc_name=%s", len(parent_docs), doc_name)
 
     # Upload embedded children
+    t_upload = time.monotonic()
     uploaded = await upload_to_search(embedded_children, doc_name)
+    logger.info(
+        "Uploaded %d child chunks for doc_name=%s in %.1fs",
+        uploaded, doc_name, time.monotonic() - t_upload,
+        extra={"doc_name": doc_name, "task_id": task.get("task_id")},
+    )
 
     return {
         "status":          "embedded",
@@ -270,15 +292,29 @@ async def _sb_listener():
                     settings.SB_QUEUE_EMBEDDING, max_wait_time=30
                 ) as receiver:
                     async for msg in receiver:
+                        task = None
                         try:
                             task       = json.loads(b"".join(msg.body))
                             result_obj = await embedding_workflow.run(task)
                             outputs    = result_obj.get_outputs()
                             result     = outputs[0] if outputs else {}
-                            logger.info("Embedding complete: %s", result)
+                            logger.info(
+                                "Embedding complete doc_name=%s status=%s uploaded=%s",
+                                result.get("doc_name"), result.get("status"), result.get("uploaded"),
+                                extra={
+                                    "task_id":  task.get("task_id"),
+                                    "doc_name": result.get("doc_name"),
+                                },
+                            )
                             await receiver.complete_message(msg)
                         except Exception as exc:
-                            logger.error("Embedding failed: %s", exc, exc_info=True)
+                            doc_name = task.get("doc_name", "unknown") if task else "unknown"
+                            task_id  = task.get("task_id",  "")        if task else ""
+                            domain   = task.get("domain",   "")        if task else ""
+                            logger.error(
+                                "Embedding failed doc_name=%s: %s", doc_name, exc, exc_info=True,
+                                extra={"task_id": task_id, "doc_name": doc_name, "domain": domain},
+                            )
                             await receiver.abandon_message(msg)
         except Exception as exc:
             logger.error("SB listener crashed, restarting in 5s: %s", exc, exc_info=True)
