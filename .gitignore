@@ -1,2 +1,29 @@
-.claude/worktrees/
+# Environment / secrets — never commit these
+.env
+*.env.local
+
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Docker build cache
+*.tar
+
+# Claude Code internal
+.claude/worktrees/

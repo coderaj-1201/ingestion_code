@@ -1,0 +1,71 @@
+# Local development — all three agents + optional Azurite emulator
+#
+# Usage:
+#   cp .env.template .env          # fill in values
+#   docker compose up --build      # start everything
+#   docker compose logs -f         # follow logs
+#
+# Each agent is isolated but shares the same built image.
+# Azurite emulates Blob Storage and Service Bus locally (optional).
+
+services:
+
+  ingestion-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ingestion-pipeline:local
+    environment:
+      AGENT: ingestion
+      PORT: "8010"
+      RUNNING_IN_AZURE: ""        # empty = use AzureCliCredential locally
+    env_file: .env
+    ports:
+      - "8010:8010"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: on-failure
+
+  processing-agent:
+    image: ingestion-pipeline:local
+    depends_on:
+      ingestion-agent:
+        condition: service_healthy
+    environment:
+      AGENT: processing
+      PORT: "8011"
+      RUNNING_IN_AZURE: ""
+    env_file: .env
+    ports:
+      - "8011:8011"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: on-failure
+
+  embedding-agent:
+    image: ingestion-pipeline:local
+    depends_on:
+      processing-agent:
+        condition: service_healthy
+    environment:
+      AGENT: embedding
+      PORT: "8012"
+      RUNNING_IN_AZURE: ""
+    env_file: .env
+    ports:
+      - "8012:8012"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8012/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: on-failure
