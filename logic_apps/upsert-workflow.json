@@ -2,35 +2,6 @@
   "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
   "contentVersion": "1.0.0.0",
 
-  "_comment": [
-    "Logic App Standard workflow — SharePoint file upsert → Ingestion Agent.",
-    "",
-    "What this does:",
-    "  1. Polls SharePoint every 5 minutes for new or modified files.",
-    "  2. Downloads the file content (base64 encoded by Logic Apps automatically).",
-    "  3. POSTs to the Ingestion Agent /ingest/from-logic-app endpoint.",
-    "     The agent handles SHA-256 dedup, Blob upload, and Service Bus queuing.",
-    "",
-    "Parameters to set before deploying (Logic App → Parameters blade):",
-    "  sharepointSiteUrl   : https://<tenant>.sharepoint.com/sites/<site>",
-    "  sharepointFolder    : Shared Documents   (or subfolder, e.g. Shared Documents/HR)",
-    "  domain              : hr  (or legal / it / ops — must match your Domain enum)",
-    "  ingestionAgentUrl   : https://<your-aca-ingestion-agent>.azurecontainerapps.io",
-    "  logicAppSecret      : <same value as LOGIC_APP_WEBHOOK_SECRET in .env>",
-    "",
-    "Connections required:",
-    "  sharepointonline    : SharePoint Online managed connector",
-    "                        Authenticate with a service account or managed identity.",
-    "                        Grant the identity 'Sites.Read.All' in Entra ID.",
-    "",
-    "Deployment:",
-    "  az logicapp workflow create \\",
-    "    --name upsert-workflow \\",
-    "    --logic-app-name <your-logic-app> \\",
-    "    --resource-group <rg> \\",
-    "    --definition @logic_apps/upsert-workflow.json"
-  ],
-
   "parameters": {
     "$connections": {
       "defaultValue": {},

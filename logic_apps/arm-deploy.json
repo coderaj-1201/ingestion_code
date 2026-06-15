@@ -2,39 +2,10 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
 
-  "_comment": [
-    "ARM template — deploys one Logic App Standard resource with two workflows.",
-    "",
-    "Deploy with:",
-    "  az deployment group create \\",
-    "    --resource-group <rg> \\",
-    "    --template-file logic_apps/arm-deploy.json \\",
-    "    --parameters \\",
-    "        logicAppName=rag-ingestion-la \\",
-    "        location=eastus \\",
-    "        sharepointSiteUrl='https://<tenant>.sharepoint.com/sites/<site>' \\",
-    "        sharepointFolder='Shared Documents' \\",
-    "        domain=hr \\",
-    "        ingestionAgentUrl='https://<aca-ingestion-agent-fqdn>' \\",
-    "        logicAppSecret='<same-as-LOGIC_APP_WEBHOOK_SECRET>'",
-    "",
-    "After deploying:",
-    "  1. Go to the Logic App resource → Connections blade.",
-    "  2. Authenticate the 'sharepointonline' API connection using a service account",
-    "     that has 'Sites.Read.All' access to the SharePoint site(s).",
-    "  3. Enable both workflows (upsert-workflow, delete-workflow).",
-    "  4. Set LOGIC_APP_WEBHOOK_SECRET in your Ingestion Agent .env / ACA secrets.",
-    "",
-    "Per-site deployment:",
-    "  Deploy one instance of this template per SharePoint site / domain combination.",
-    "  Change the 'domain' parameter to match (hr, legal, it, ops).",
-    "  All instances can share the same Ingestion Agent URL and secret."
-  ],
-
   "parameters": {
     "logicAppName": {
       "type": "string",
-      "metadata": { "description": "Name for the Logic App Standard resource." }
+      "metadata": { "description": "Name for the Logic App resource." }
     },
     "location": {
       "type": "string",
@@ -83,8 +54,7 @@
         "api": {
           "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', parameters('location'), 'sharepointonline')]"
         }
-      },
-      "comments": "API connection shell — authenticate it manually after deployment (Step 2 above)."
+      }
     },
 
     {
@@ -101,12 +71,12 @@
           "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
           "contentVersion": "1.0.0.0",
           "parameters": {
-            "$connections": { "defaultValue": {}, "type": "Object" },
+            "$connections":      { "defaultValue": {}, "type": "Object" },
             "sharepointSiteUrl": { "defaultValue": "[parameters('sharepointSiteUrl')]", "type": "String" },
             "sharepointFolder":  { "defaultValue": "[parameters('sharepointFolder')]",  "type": "String" },
-            "domain":            { "defaultValue": "[parameters('domain')]",            "type": "String" },
-            "ingestionAgentUrl": { "defaultValue": "[parameters('ingestionAgentUrl')]", "type": "String" },
-            "logicAppSecret":    { "defaultValue": "",                                  "type": "SecureString" }
+            "domain":            { "defaultValue": "[parameters('domain')]",             "type": "String" },
+            "ingestionAgentUrl": { "defaultValue": "[parameters('ingestionAgentUrl')]",  "type": "String" },
+            "logicAppSecret":    { "defaultValue": "",                                   "type": "SecureString" }
           },
           "triggers": {
             "When_a_file_is_created_or_modified": {
@@ -166,6 +136,26 @@
                   "maximumInterval": "PT1H"
                 }
               }
+            },
+            "Check_response": {
+              "type": "If",
+              "runAfter": { "Send_to_Ingestion_Agent": ["Succeeded"] },
+              "expression": {
+                "and": [{ "not": { "equals": ["@outputs('Send_to_Ingestion_Agent')['statusCode']", 200] } }]
+              },
+              "actions": {
+                "Terminate_with_error": {
+                  "type": "Terminate",
+                  "inputs": {
+                    "runStatus": "Failed",
+                    "runError": {
+                      "code": "@{outputs('Send_to_Ingestion_Agent')['statusCode']}",
+                      "message": "Ingestion Agent returned non-200: @{body('Send_to_Ingestion_Agent')}"
+                    }
+                  }
+                }
+              },
+              "else": { "actions": {} }
             }
           }
         },
