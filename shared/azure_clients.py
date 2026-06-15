@@ -56,11 +56,17 @@ def get_blob_service_client() -> BlobServiceClient:
 
 
 def _search_credential():
-    # Use Managed Identity in Azure for keyless, auditable access.
-    # Fall back to API key locally where managed identity is not available.
+    # In Azure: Managed Identity — keyless, auditable, no secret to rotate.
+    # Locally:  API key — set AZURE_SEARCH_API_KEY in .env.
+    #           AzureCliCredential is also accepted locally if AZURE_SEARCH_API_KEY
+    #           is left blank (useful when the developer has Search RBAC role assigned).
     if os.getenv("RUNNING_IN_AZURE"):
         return _credential()
-    return AzureKeyCredential(settings.AZURE_SEARCH_API_KEY.get_secret_value())
+    if settings.AZURE_SEARCH_API_KEY:
+        return AzureKeyCredential(settings.AZURE_SEARCH_API_KEY.get_secret_value())
+    # No API key set locally → fall back to AzureCliCredential.
+    # Requires: az role assignment create --role "Search Index Data Contributor" ...
+    return _credential()
 
 
 @lru_cache(maxsize=1)

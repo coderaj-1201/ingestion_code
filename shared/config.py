@@ -32,7 +32,9 @@ class Settings(BaseSettings):
 
     # ── Azure AI Search ───────────────────────────────────────────────────────
     AZURE_SEARCH_ENDPOINT: AnyHttpUrl
-    AZURE_SEARCH_API_KEY: SecretStr
+    # Required locally (API key auth). Leave blank in ACA — Managed Identity
+    # is used instead when RUNNING_IN_AZURE=true, so the key is never read.
+    AZURE_SEARCH_API_KEY: SecretStr | None = None
     AZURE_SEARCH_INDEX: str                 = "idx-rag"
     AZURE_SEARCH_SEMANTIC_CONFIG: str       = "rag-semantic-config"
 
