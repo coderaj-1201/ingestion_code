@@ -27,9 +27,10 @@ logger = logging.getLogger(__name__)
 
 
 def _shape_is_title(shape) -> bool:
-    from pptx.enum.shapes import PP_PLACEHOLDER
     try:
-        return shape.placeholder_format and shape.placeholder_format.idx in (0, 1)
+        # Only placeholder idx=0 is the slide title.
+        # idx=1 is subtitle (title slides) or body content (content slides) — never the title.
+        return shape.placeholder_format is not None and shape.placeholder_format.idx == 0
     except Exception:
         return False
 

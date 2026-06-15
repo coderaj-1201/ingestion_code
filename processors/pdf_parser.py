@@ -366,11 +366,14 @@ def parse_pdf(
     current_parent_id  = str(uuid4())
     current_parent_content: list[str] = []
     current_parent_page = 1
+    # Children collected for the current section; emitted AFTER the parent on flush.
+    current_section_children: list[RawChunk] = []
 
     def _flush_parent():
-        nonlocal current_parent_id, current_parent_content
+        nonlocal current_parent_id, current_parent_content, current_section_children
         if not current_parent_content:
             return
+        # Parent first — embedding agent requires parent before children in upload order.
         chunks.append(RawChunk(
             chunk_id           = current_parent_id,
             parent_id          = "",
@@ -388,8 +391,10 @@ def parse_pdf(
             section_subheading = current_subheading,
             content            = "\n\n".join(current_parent_content),
         ))
-        current_parent_id      = str(uuid4())
-        current_parent_content = []
+        chunks.extend(current_section_children)
+        current_parent_id        = str(uuid4())
+        current_parent_content   = []
+        current_section_children = []
 
     for page_num, plumber_page in enumerate(plumber_doc.pages):
         display_page = page_num + 1
@@ -446,7 +451,7 @@ def parse_pdf(
                 if display_page == 1 and not doc_title:
                     doc_title = text
 
-                chunks.append(RawChunk(
+                current_section_children.append(RawChunk(
                     chunk_id           = str(uuid4()),
                     parent_id          = current_parent_id,
                     chunk_type         = ChunkType.HEADING,
@@ -471,7 +476,7 @@ def parse_pdf(
 
             else:
                 current_parent_content.append(text)
-                chunks.append(RawChunk(
+                current_section_children.append(RawChunk(
                     chunk_id           = str(uuid4()),
                     parent_id          = current_parent_id,
                     chunk_type         = ChunkType.PARAGRAPH,
@@ -500,7 +505,7 @@ def parse_pdf(
             if not nl_summary:
                 continue
 
-            chunks.append(RawChunk(
+            current_section_children.append(RawChunk(
                 chunk_id           = str(uuid4()),
                 parent_id          = current_parent_id,
                 chunk_type         = ChunkType.TABLE,

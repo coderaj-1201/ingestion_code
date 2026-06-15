@@ -79,13 +79,16 @@ def parse_docx(
     current_parent_id  = str(uuid4())
     current_parent_content: list[str] = []
     current_parent_page = 1
+    # Children collected for current section; emitted AFTER the parent on flush.
+    current_section_children: list[RawChunk] = []
     chunks: list[RawChunk] = []
 
     def _flush_parent():
-        nonlocal current_parent_id, current_parent_content
+        nonlocal current_parent_id, current_parent_content, current_section_children
         if not current_parent_content:
             return
-        parent = RawChunk(
+        # Parent first — embedding agent requires parent before children.
+        chunks.append(RawChunk(
             chunk_id           = current_parent_id,
             parent_id          = "",
             chunk_type         = ChunkType.HEADING if current_heading else ChunkType.PARAGRAPH,
@@ -101,10 +104,11 @@ def parse_docx(
             section_heading    = current_heading,
             section_subheading = current_subheading,
             content            = "\n\n".join(current_parent_content),
-        )
-        chunks.append(parent)
-        current_parent_id      = str(uuid4())
-        current_parent_content = []
+        ))
+        chunks.extend(current_section_children)
+        current_parent_id        = str(uuid4())
+        current_parent_content   = []
+        current_section_children = []
 
     # Collect all block-level elements in order (paragraphs + tables)
     body = document.element.body
@@ -139,7 +143,7 @@ def parse_docx(
                 current_parent_page = page_num
                 current_heading     = text
                 current_subheading  = ""
-                chunks.append(RawChunk(
+                current_section_children.append(RawChunk(
                     chunk_id           = str(uuid4()),
                     parent_id          = current_parent_id,
                     chunk_type         = ChunkType.HEADING,
@@ -168,7 +172,7 @@ def parse_docx(
                 if not cleaned:
                     continue
                 current_parent_content.append(cleaned)
-                chunks.append(RawChunk(
+                current_section_children.append(RawChunk(
                     chunk_id           = str(uuid4()),
                     parent_id          = current_parent_id,
                     chunk_type         = ChunkType.PARAGRAPH,
@@ -194,7 +198,7 @@ def parse_docx(
             if not tbl_md:
                 continue
             nl_summary = _llm_serialise_table(tbl_md, current_heading)
-            chunks.append(RawChunk(
+            current_section_children.append(RawChunk(
                 chunk_id           = str(uuid4()),
                 parent_id          = current_parent_id,
                 chunk_type         = ChunkType.TABLE,

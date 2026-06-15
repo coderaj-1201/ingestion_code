@@ -87,8 +87,15 @@ def parse_xlsx(
         parent_id = str(uuid4())
 
         # ── Named tables in this sheet ────────────────────────────────────────
+        # ws.tables is a dict-like: keys=table names, values=Table objects in
+        # older openpyxl but raw ref strings in newer versions — normalise both.
         if ws.tables:
             for tbl_name, tbl in ws.tables.items():
+                # openpyxl ≥ 3.1 changed ws.tables to return Table objects directly
+                # when iterated; the value is sometimes a string (the ref) in older
+                # versions. Look up the Table object by name when needed.
+                if isinstance(tbl, str):
+                    tbl = ws.tables[tbl_name]
                 tbl_md = _table_range_to_markdown(ws, tbl)
                 if not tbl_md:
                     continue
