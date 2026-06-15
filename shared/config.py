@@ -41,7 +41,8 @@ class Settings(BaseSettings):
     # ── Azure Service Bus ─────────────────────────────────────────────────────
     AZURE_SERVICE_BUS_CONNECTION_STR: SecretStr | None = None  # local dev
     AZURE_SERVICE_BUS_NAMESPACE: str        = ""               # prod (keyless)
-    SB_QUEUE_INGESTION: str                 = "ingestion-queue"
+    # Only two queues are used — ingestion-queue was removed (Logic Apps calls
+    # the Ingestion Agent directly over HTTP, no queue in that hop).
     SB_QUEUE_PROCESSING: str                = "processing-queue"
     SB_QUEUE_EMBEDDING: str                 = "embedding-queue"
     
