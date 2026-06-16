@@ -122,8 +122,8 @@
                       "connection": { "name": "@parameters('$connections')['sharepointonline']['connectionId']" }
                     },
                     "method": "get",
-                    "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/files/@{encodeURIComponent(item()?['ID'])}/content",
-                    "queries": { "inferContentType": false }
+                    "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/GetFileContentByPath",
+                    "queries": { "path": "@{item()?['FileRef']}", "inferContentType": false }
                   }
                 },
                 "Send_to_Ingestion_Agent": {

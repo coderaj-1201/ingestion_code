@@ -89,8 +89,9 @@
               }
             },
             "method": "get",
-            "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/files/@{encodeURIComponent(item()?['ID'])}/content",
+            "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/GetFileContentByPath",
             "queries": {
+              "path": "@{item()?['FileRef']}",
               "inferContentType": false
             }
           }
