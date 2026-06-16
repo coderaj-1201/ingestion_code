@@ -152,26 +152,6 @@
                       "maximumInterval": "PT1H"
                     }
                   }
-                },
-                "Check_response": {
-                  "type": "If",
-                  "runAfter": { "Send_to_Ingestion_Agent": ["Succeeded"] },
-                  "expression": {
-                    "and": [{ "not": { "equals": ["@outputs('Send_to_Ingestion_Agent')['statusCode']", 200] } }]
-                  },
-                  "actions": {
-                    "Terminate_with_error": {
-                      "type": "Terminate",
-                      "inputs": {
-                        "runStatus": "Failed",
-                        "runError": {
-                          "code": "@{outputs('Send_to_Ingestion_Agent')['statusCode']}",
-                          "message": "Ingestion Agent returned non-200: @{body('Send_to_Ingestion_Agent')}"
-                        }
-                      }
-                    }
-                  },
-                  "else": { "actions": {} }
                 }
               }
             }
