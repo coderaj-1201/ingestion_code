@@ -16,7 +16,7 @@ SUBSCRIPTION_ID = "41d22965-fc9f-4e6b-8e10-c70bdba716c9"
 RESOURCE_GROUP = "rg-aisharedservices-eastus-prod"
 WORKFLOW_NAME = "lgcapp-aishrdsvcs-eus-prod"
 LOCATION = "eastus"
-DEFINITION_PATH = "logic_apps/upsert_workflow.json"
+DEFINITION_PATH = "logic_apps/upsert-workflow.json"
 
 if len(sys.argv) != 2:
     print("Usage: python deploy_logic_app.py <logicAppSecret>")
