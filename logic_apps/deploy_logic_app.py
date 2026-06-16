@@ -49,7 +49,7 @@ body = {
                 }
             },
             "sharepointSiteUrl": {"value": "https://irondrive.sharepoint.com/sites/OPSPlaybook"},
-            "sharepointLibrary": {"value": "Shared Documents"},
+            "sharepointLibrary": {"value": "Global Ops Playbook"},
             "domain": {"value": "ops"},
             "ingestionAgentUrl": {
                 "value": "https://cntapp-ingbot-aishrdvcs-eus-prod.mangoisland-637b477f.eastus.azurecontainerapps.io"

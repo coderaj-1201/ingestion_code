@@ -12,7 +12,7 @@
       "type": "String"
     },
     "sharepointLibrary": {
-      "defaultValue": "Shared Documents",
+      "defaultValue": "Global Ops Playbook",
       "type": "String"
     },
     "domain": {
