@@ -54,7 +54,6 @@
         "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
         "queries": {
           "$filter": "Modified ge datetime'@{addMinutes(utcNow(), -7)}'",
-          "$select": "ID,FileLeafRef,FileRef,Modified,FSObjType",
           "$top": 500
         }
       }
@@ -67,7 +66,7 @@
       },
       "inputs": {
         "from": "@body('Get_items')?['value']",
-        "where": "@not(equals(string(item()?['FSObjType']), '1'))"
+        "where": "@not(equals(item()?['{IsFolder}'], true))"
       }
     },
 
@@ -91,7 +90,7 @@
             "method": "get",
             "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/GetFileContentByPath",
             "queries": {
-              "path": "@{item()?['FileRef']}",
+              "path": "@{concat('/', item()?['{FullPath}'])}",
               "inferContentType": false
             }
           }
@@ -110,10 +109,10 @@
               "X-Logic-App-Secret": "@parameters('logicAppSecret')"
             },
             "body": {
-              "doc_name": "@{item()?['FileLeafRef']}",
-              "doc_url": "@{item()?['FileRef']}",
+              "doc_name": "@{item()?['{FilenameWithExtension}']}",
+              "doc_url": "@{item()?['{Link}']}",
               "domain": "@parameters('domain')",
-              "file_type": "@{last(split(item()?['FileLeafRef'], '.'))}",
+              "file_type": "@{last(split(item()?['{FilenameWithExtension}'], '.'))}",
               "file_content_base64": "@{base64(body('Get_file_content'))}",
               "is_delete": false
             },
