@@ -11,7 +11,7 @@
       "defaultValue": "https://<tenant>.sharepoint.com/sites/<site>",
       "type": "String"
     },
-    "sharepointFolder": {
+    "sharepointLibrary": {
       "defaultValue": "Shared Documents",
       "type": "String"
     },
@@ -30,33 +30,18 @@
   },
 
   "triggers": {
-    "When_a_file_is_created_or_modified": {
-      "type": "ApiConnection",
+    "Recurrence": {
+      "type": "Recurrence",
       "recurrence": {
         "frequency": "Minute",
         "interval": 5
-      },
-      "splitOn": "@triggerBody()",
-      "inputs": {
-        "host": {
-          "connection": {
-            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
-          }
-        },
-        "method": "get",
-        "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/triggers/onupdatedfile",
-        "queries": {
-          "folderId": "@parameters('sharepointFolder')",
-          "includeFileContent": false,
-          "inferContentType": true
-        }
       }
     }
   },
 
   "actions": {
 
-    "Get_file_content": {
+    "Get_items": {
       "type": "ApiConnection",
       "runAfter": {},
       "inputs": {
@@ -66,74 +51,115 @@
           }
         },
         "method": "get",
-        "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/files/@{encodeURIComponent(triggerBody()?['Id'])}/content",
+        "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
         "queries": {
-          "inferContentType": false
+          "$filter": "Modified ge datetime'@{addMinutes(utcNow(), -7)}'",
+          "$select": "ID,FileLeafRef,FileRef,Modified,FSObjType",
+          "$top": 500
         }
       }
     },
 
-    "Send_to_Ingestion_Agent": {
-      "type": "Http",
+    "Filter_to_files_only": {
+      "type": "Query",
       "runAfter": {
-        "Get_file_content": ["Succeeded"]
+        "Get_items": ["Succeeded"]
       },
       "inputs": {
-        "method": "POST",
-        "uri": "@{parameters('ingestionAgentUrl')}/ingest/from-logic-app",
-        "headers": {
-          "Content-Type": "application/json",
-          "X-Logic-App-Secret": "@parameters('logicAppSecret')"
-        },
-        "body": {
-          "doc_name": "@triggerBody()?['Name']",
-          "doc_url": "@triggerBody()?['Path']",
-          "domain": "@parameters('domain')",
-          "file_type": "@{last(split(triggerBody()?['Name'], '.'))}",
-          "file_content_base64": "@{base64(body('Get_file_content'))}",
-          "is_delete": false
-        },
-        "retryPolicy": {
-          "type": "exponential",
-          "count": 4,
-          "interval": "PT10S",
-          "minimumInterval": "PT10S",
-          "maximumInterval": "PT1H"
-        }
+        "from": "@body('Get_items')?['value']",
+        "where": "@not(equals(string(item()?['FSObjType']), '1'))"
       }
     },
 
-    "Check_response": {
-      "type": "If",
+    "For_each_changed_file": {
+      "type": "Foreach",
       "runAfter": {
-        "Send_to_Ingestion_Agent": ["Succeeded"]
+        "Filter_to_files_only": ["Succeeded"]
       },
-      "expression": {
-        "and": [
-          {
-            "not": {
-              "equals": [
-                "@outputs('Send_to_Ingestion_Agent')['statusCode']",
-                200
-              ]
+      "foreach": "@body('Filter_to_files_only')",
+      "actions": {
+
+        "Get_file_content": {
+          "type": "ApiConnection",
+          "runAfter": {},
+          "inputs": {
+            "host": {
+              "connection": {
+                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+              }
+            },
+            "method": "get",
+            "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/files/@{encodeURIComponent(item()?['ID'])}/content",
+            "queries": {
+              "inferContentType": false
             }
           }
-        ]
-      },
-      "actions": {
-        "Terminate_with_error": {
-          "type": "Terminate",
+        },
+
+        "Send_to_Ingestion_Agent": {
+          "type": "Http",
+          "runAfter": {
+            "Get_file_content": ["Succeeded"]
+          },
           "inputs": {
-            "runStatus": "Failed",
-            "runError": {
-              "code": "@{outputs('Send_to_Ingestion_Agent')['statusCode']}",
-              "message": "Ingestion Agent returned non-200: @{body('Send_to_Ingestion_Agent')}"
+            "method": "POST",
+            "uri": "@{parameters('ingestionAgentUrl')}/ingest/from-logic-app",
+            "headers": {
+              "Content-Type": "application/json",
+              "X-Logic-App-Secret": "@parameters('logicAppSecret')"
+            },
+            "body": {
+              "doc_name": "@{item()?['FileLeafRef']}",
+              "doc_url": "@{item()?['FileRef']}",
+              "domain": "@parameters('domain')",
+              "file_type": "@{last(split(item()?['FileLeafRef'], '.'))}",
+              "file_content_base64": "@{base64(body('Get_file_content'))}",
+              "is_delete": false
+            },
+            "retryPolicy": {
+              "type": "exponential",
+              "count": 4,
+              "interval": "PT10S",
+              "minimumInterval": "PT10S",
+              "maximumInterval": "PT1H"
             }
+          }
+        },
+
+        "Check_response": {
+          "type": "If",
+          "runAfter": {
+            "Send_to_Ingestion_Agent": ["Succeeded"]
+          },
+          "expression": {
+            "and": [
+              {
+                "not": {
+                  "equals": [
+                    "@outputs('Send_to_Ingestion_Agent')['statusCode']",
+                    200
+                  ]
+                }
+              }
+            ]
+          },
+          "actions": {
+            "Terminate_with_error": {
+              "type": "Terminate",
+              "inputs": {
+                "runStatus": "Failed",
+                "runError": {
+                  "code": "@{outputs('Send_to_Ingestion_Agent')['statusCode']}",
+                  "message": "Ingestion Agent returned non-200: @{body('Send_to_Ingestion_Agent')}"
+                }
+              }
+            }
+          },
+          "else": {
+            "actions": {}
           }
         }
-      },
-      "else": {
-        "actions": {}
+
       }
     }
 
