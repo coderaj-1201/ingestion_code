@@ -30,6 +30,7 @@ with open(DEFINITION_PATH, "r", encoding="utf-8") as f:
 token = subprocess.check_output(
     ["az", "account", "get-access-token", "--query", "accessToken", "-o", "tsv"],
     text=True,
+    shell=True,
 ).strip()
 
 body = {
