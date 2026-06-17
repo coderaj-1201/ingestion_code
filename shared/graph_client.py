@@ -75,7 +75,9 @@ class GraphClient:
         if folder_path in ("/", ""):
             url = f"{_GRAPH_BASE}/sites/{site_id}/drive/root/children"
         else:
-            encoded = folder_path.strip("/").replace("/", ":/") + ":"
+            from urllib.parse import quote
+            safe_path = "/".join(quote(seg, safe="") for seg in folder_path.strip("/").split("/"))
+            encoded = safe_path.replace("/", ":/") + ":"
             url = f"{_GRAPH_BASE}/sites/{site_id}/drive/root:/{encoded}/children"
 
         items = []
