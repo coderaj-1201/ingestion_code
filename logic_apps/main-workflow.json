@@ -21,7 +21,7 @@
 
   "actions": {
 
-    "Get_recent_files": {
+    "Get_all_files": {
       "type": "ApiConnection",
       "runAfter": {},
       "inputs": {
@@ -31,7 +31,7 @@
         "method": "get",
         "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
         "queries": {
-          "$filter": "Modified ge datetime'@{addMinutes(utcNow(), -7)}'",
+          "$select": "{FilenameWithExtension},{IsFolder},{Link},{FullPath},Modified",
           "$top": 500
         }
       }
@@ -39,17 +39,26 @@
 
     "Filter_files_only": {
       "type": "Query",
-      "runAfter": { "Get_recent_files": ["Succeeded"] },
+      "runAfter": { "Get_all_files": ["Succeeded"] },
       "inputs": {
-        "from": "@body('Get_recent_files')?['value']",
+        "from": "@body('Get_all_files')?['value']",
         "where": "@not(equals(item()?['{IsFolder}'], true))"
+      }
+    },
+
+    "Filter_recently_modified": {
+      "type": "Query",
+      "runAfter": { "Filter_files_only": ["Succeeded"] },
+      "inputs": {
+        "from": "@body('Filter_files_only')",
+        "where": "@greaterOrEquals(ticks(item()?['Modified']), ticks(addMinutes(utcNow(), -7)))"
       }
     },
 
     "For_each_changed_file": {
       "type": "Foreach",
-      "runAfter": { "Filter_files_only": ["Succeeded"] },
-      "foreach": "@body('Filter_files_only')",
+      "runAfter": { "Filter_recently_modified": ["Succeeded"] },
+      "foreach": "@body('Filter_recently_modified')",
       "actions": {
         "Get_file_content": {
           "type": "ApiConnection",
@@ -93,36 +102,11 @@
       }
     },
 
-    "Get_all_files": {
-      "type": "ApiConnection",
-      "runAfter": {},
-      "inputs": {
-        "host": {
-          "connection": { "name": "@parameters('$connections')['sharepointonline']['connectionId']" }
-        },
-        "method": "get",
-        "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
-        "queries": {
-          "$select": "{FilenameWithExtension},{IsFolder}",
-          "$top": 500
-        }
-      }
-    },
-
-    "Filter_all_files_only": {
-      "type": "Query",
-      "runAfter": { "Get_all_files": ["Succeeded"] },
-      "inputs": {
-        "from": "@body('Get_all_files')?['value']",
-        "where": "@not(equals(item()?['{IsFolder}'], true))"
-      }
-    },
-
     "Build_current_names": {
       "type": "Select",
-      "runAfter": { "Filter_all_files_only": ["Succeeded"] },
+      "runAfter": { "Filter_files_only": ["Succeeded"] },
       "inputs": {
-        "from": "@body('Filter_all_files_only')",
+        "from": "@body('Filter_files_only')",
         "select": "@item()?['{FilenameWithExtension}']"
       }
     },
