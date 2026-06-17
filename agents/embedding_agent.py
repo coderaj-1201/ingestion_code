@@ -29,7 +29,6 @@ from dataclasses import asdict
 import uvicorn
 from agent_framework import step, workflow
 from azure.search.documents import SearchClient
-from azure.search.documents.models import IndexDocumentsBatch
 from azure.storage.blob.aio import BlobServiceClient as AsyncBlobClient
 from fastapi import FastAPI
 
