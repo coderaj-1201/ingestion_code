@@ -7,7 +7,7 @@
     "sharepointSiteUrl": { "defaultValue": "https://<tenant>.sharepoint.com/sites/<site>", "type": "String" },
     "sharepointLibrary": { "defaultValue": "Shared Documents", "type": "String" },
     "domain":            { "defaultValue": "ops", "type": "String" },
-    "ingestionAgentUrl": { "defaultValue": "https://<ingestion-agent-url>", "type": "String" },
+    "ingestionAgentUrl": { "defaultValue": "https://cntapp-ingbot-aishrdvcs-eus-prod.mangoisland-637b477f.eastus.azurecontainerapps.io", "type": "String" },
     "logicAppSecret":    { "defaultValue": "", "type": "SecureString" },
     "storageAccountName":{ "defaultValue": "<storage-account-name>", "type": "String" }
   },
