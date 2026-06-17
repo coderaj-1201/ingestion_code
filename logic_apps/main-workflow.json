@@ -48,7 +48,7 @@
       "runAfter": { "Filter_files_only": ["Succeeded"] },
       "inputs": {
         "from": "@body('Filter_files_only')",
-        "where": "@greaterOrEquals(item()?['Modified'], addMinutes(utcNow(), -7))"
+        "where": "@greaterOrEquals(ticks(item()?['Modified']), ticks(addMinutes(utcNow(), -7)))"
       }
     },
 
