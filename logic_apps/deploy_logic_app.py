@@ -11,7 +11,7 @@ App and grant it Storage Blob Data Contributor on the storage account so it can
 read/write the snapshots/<domain>.json blob.
 
 Usage:
-    python deploy_logic_app.py <logicAppSecret> <storageAccountName>
+    python deploy_logic_app.py <logicAppSecret>
 """
 import json
 import subprocess
@@ -19,18 +19,19 @@ import sys
 
 import requests
 
-SUBSCRIPTION_ID = "41d22965-fc9f-4e6b-8e10-c70bdba716c9"
-RESOURCE_GROUP = "rg-aisharedservices-eastus-prod"
-WORKFLOW_NAME = "lgcapp-aishrdsvcs-eus-prod"
-LOCATION = "eastus"
-DEFINITION_PATH = "logic_apps/main-workflow.json"
+SUBSCRIPTION_ID      = "41d22965-fc9f-4e6b-8e10-c70bdba716c9"
+RESOURCE_GROUP       = "rg-aisharedservices-eastus-prod"
+WORKFLOW_NAME        = "lgcapp-aishrdsvcs-eus-prod"
+LOCATION             = "eastus"
+DEFINITION_PATH      = "logic_apps/main-workflow.json"
+STORAGE_ACCOUNT_NAME = "blbstraishrdsvcseusprod"
+INGESTION_AGENT_URL  = "https://bpf2vqkh-8010.inc1.devtunnels.ms"
 
-if len(sys.argv) != 3:
-    print("Usage: python deploy_logic_app.py <logicAppSecret> <storageAccountName>")
+if len(sys.argv) != 2:
+    print("Usage: python deploy_logic_app.py <logicAppSecret>")
     sys.exit(1)
 
-logic_app_secret     = sys.argv[1]
-storage_account_name = sys.argv[2]
+logic_app_secret = sys.argv[1]
 
 with open(DEFINITION_PATH, "r", encoding="utf-8") as f:
     definition = json.load(f)
@@ -56,14 +57,12 @@ body = {
                     }
                 }
             },
-            "sharepointSiteUrl": {"value": "https://irondrive.sharepoint.com/sites/OPSPlaybook"},
-            "sharepointLibrary": {"value": "Global Ops Playbook"},
-            "domain": {"value": "ops"},
-            "ingestionAgentUrl": {
-                "value": "https://bpf2vqkh-8010.inc1.devtunnels.ms"
-            },
+            "sharepointSiteUrl":  {"value": "https://irondrive.sharepoint.com/sites/OPSPlaybook"},
+            "sharepointLibrary":  {"value": "Global Ops Playbook"},
+            "domain":             {"value": "ops"},
+            "ingestionAgentUrl":  {"value": INGESTION_AGENT_URL},
             "logicAppSecret":     {"value": logic_app_secret},
-            "storageAccountName": {"value": storage_account_name},
+            "storageAccountName": {"value": STORAGE_ACCOUNT_NAME},
         },
     },
 }
