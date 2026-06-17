@@ -54,6 +54,7 @@ body = {
             "ingestionAgentUrl": {
                 "value": "https://bpf2vqkh-8010.inc1.devtunnels.ms"
             },
+            "storageAccountName": {"value": "blbstraishrdsvcseusprod"},
             "logicAppSecret": {"value": logic_app_secret},
         },
     },

@@ -26,6 +26,10 @@
     "logicAppSecret": {
       "defaultValue": "",
       "type": "SecureString"
+    },
+    "storageAccountName": {
+      "defaultValue": "<storage-account-name>",
+      "type": "String"
     }
   },
 
@@ -126,6 +130,146 @@
           }
         }
 
+      }
+    },
+
+    "Get_all_items": {
+      "type": "ApiConnection",
+      "runAfter": {},
+      "inputs": {
+        "host": {
+          "connection": {
+            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+          }
+        },
+        "method": "get",
+        "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
+        "queries": {
+          "$top": 500
+        }
+      }
+    },
+
+    "Filter_all_to_files_only": {
+      "type": "Query",
+      "runAfter": {
+        "Get_all_items": ["Succeeded"]
+      },
+      "inputs": {
+        "from": "@body('Get_all_items')?['value']",
+        "where": "@not(equals(item()?['{IsFolder}'], true))"
+      }
+    },
+
+    "Build_current_names": {
+      "type": "Select",
+      "runAfter": {
+        "Filter_all_to_files_only": ["Succeeded"]
+      },
+      "inputs": {
+        "from": "@body('Filter_all_to_files_only')",
+        "select": "@item()?['{FilenameWithExtension}']"
+      }
+    },
+
+    "Read_snapshot": {
+      "type": "Http",
+      "runAfter": {
+        "Build_current_names": ["Succeeded"]
+      },
+      "inputs": {
+        "method": "GET",
+        "uri": "https://@{parameters('storageAccountName')}.blob.core.windows.net/processed-chunks/snapshots/@{parameters('domain')}.json",
+        "headers": {
+          "x-ms-version": "2020-04-08"
+        },
+        "authentication": {
+          "type": "ManagedServiceIdentity",
+          "audience": "https://storage.azure.com/"
+        }
+      }
+    },
+
+    "Parse_snapshot": {
+      "type": "ParseJson",
+      "runAfter": {
+        "Read_snapshot": ["Succeeded", "Failed"]
+      },
+      "inputs": {
+        "content": "@if(equals(outputs('Read_snapshot')['statusCode'], 200), body('Read_snapshot'), json('[]'))",
+        "schema": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "Find_deleted_files": {
+      "type": "Query",
+      "runAfter": {
+        "Parse_snapshot": ["Succeeded"]
+      },
+      "inputs": {
+        "from": "@body('Parse_snapshot')",
+        "where": "@not(contains(body('Build_current_names'), item()))"
+      }
+    },
+
+    "For_each_deleted_file": {
+      "type": "Foreach",
+      "runAfter": {
+        "Find_deleted_files": ["Succeeded"]
+      },
+      "foreach": "@body('Find_deleted_files')",
+      "actions": {
+        "Send_delete_to_Ingestion_Agent": {
+          "type": "Http",
+          "runAfter": {},
+          "inputs": {
+            "method": "POST",
+            "uri": "@{parameters('ingestionAgentUrl')}/ingest/from-logic-app",
+            "headers": {
+              "Content-Type": "application/json",
+              "X-Logic-App-Secret": "@parameters('logicAppSecret')"
+            },
+            "body": {
+              "doc_name": "@{item()}",
+              "doc_url": "",
+              "domain": "@parameters('domain')",
+              "file_type": "@{last(split(item(), '.'))}",
+              "file_content_base64": "",
+              "is_delete": true
+            },
+            "retryPolicy": {
+              "type": "exponential",
+              "count": 4,
+              "interval": "PT10S",
+              "minimumInterval": "PT10S",
+              "maximumInterval": "PT1H"
+            }
+          }
+        }
+      }
+    },
+
+    "Save_snapshot": {
+      "type": "Http",
+      "runAfter": {
+        "For_each_deleted_file": ["Succeeded", "Skipped", "Failed"]
+      },
+      "inputs": {
+        "method": "PUT",
+        "uri": "https://@{parameters('storageAccountName')}.blob.core.windows.net/processed-chunks/snapshots/@{parameters('domain')}.json",
+        "headers": {
+          "x-ms-version": "2020-04-08",
+          "x-ms-blob-type": "BlockBlob",
+          "Content-Type": "application/json"
+        },
+        "body": "@body('Build_current_names')",
+        "authentication": {
+          "type": "ManagedServiceIdentity",
+          "audience": "https://storage.azure.com/"
+        }
       }
     }
 
