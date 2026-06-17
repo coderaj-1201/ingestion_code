@@ -52,7 +52,7 @@ body = {
             "sharepointLibrary": {"value": "Global Ops Playbook"},
             "domain": {"value": "ops"},
             "ingestionAgentUrl": {
-                "value": "https://cntapp-ingbot-aishrdvcs-eus-prod.mangoisland-637b477f.eastus.azurecontainerapps.io"
+                "value": "https://bpf2vqkh-8010.inc1.devtunnels.ms"
             },
             "logicAppSecret": {"value": logic_app_secret},
         },
