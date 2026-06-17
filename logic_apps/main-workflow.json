@@ -102,7 +102,10 @@
         },
         "method": "get",
         "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
-        "queries": { "$top": 500 }
+        "queries": {
+          "$select": "{FilenameWithExtension},{IsFolder}",
+          "$top": 500
+        }
       }
     },
 
@@ -163,6 +166,7 @@
       "actions": {
         "Send_delete_to_Ingestion_Agent": {
           "type": "Http",
+          "runAfter": {},
           "inputs": {
             "method": "POST",
             "uri": "@{parameters('ingestionAgentUrl')}/ingest/from-logic-app",
@@ -192,7 +196,7 @@
 
     "Save_snapshot": {
       "type": "Http",
-      "runAfter": { "For_each_deleted_file": ["Succeeded", "Skipped"] },
+      "runAfter": { "For_each_deleted_file": ["Succeeded", "Skipped", "Failed"] },
       "inputs": {
         "method": "PUT",
         "uri": "https://@{parameters('storageAccountName')}.blob.core.windows.net/processed-chunks/snapshots/@{parameters('domain')}.json",
