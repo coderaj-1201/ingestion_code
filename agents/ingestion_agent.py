@@ -27,7 +27,6 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
@@ -110,17 +109,16 @@ async def _resolve_all_sites() -> None:
 
 # ── Blob helpers ──────────────────────────────────────────────────────────────
 
+def _credential():
+    from azure.identity.aio import AzureCliCredential, ManagedIdentityCredential
+    return ManagedIdentityCredential() if os.getenv("RUNNING_IN_AZURE") else AzureCliCredential()
+
+
 async def _upload_to_blob(blob_path: str, data: bytes) -> None:
     """Upload raw file bytes to raw-documents container."""
-    from azure.identity.aio import AzureCliCredential, ManagedIdentityCredential
-
-    credential = (
-        ManagedIdentityCredential() if os.getenv("RUNNING_IN_AZURE")
-        else AzureCliCredential()
-    )
     async with AsyncBlobClient(
         account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
-        credential=credential,
+        credential=_credential(),
     ) as blob_service:
         container   = blob_service.get_container_client(settings.AZURE_STORAGE_CONTAINER_RAW)
         blob_client = container.get_blob_client(blob_path)
@@ -136,21 +134,12 @@ def _sha256_hex(data: bytes) -> str:
 
 
 async def _blob_sha256(blob_path: str) -> str | None:
-    """
-    Read the 'sha256' metadata tag from an existing blob.
-    Returns None if the blob doesn't exist or has no tag.
-    """
-    from azure.identity.aio import AzureCliCredential, ManagedIdentityCredential
+    """Read the 'sha256' metadata tag from an existing blob. Returns None if absent."""
     from azure.core.exceptions import ResourceNotFoundError
-
-    credential = (
-        ManagedIdentityCredential() if os.getenv("RUNNING_IN_AZURE")
-        else AzureCliCredential()
-    )
     try:
         async with AsyncBlobClient(
             account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
-            credential=credential,
+            credential=_credential(),
         ) as blob_service:
             container   = blob_service.get_container_client(settings.AZURE_STORAGE_CONTAINER_RAW)
             blob_client = container.get_blob_client(blob_path)
@@ -165,15 +154,9 @@ async def _blob_sha256(blob_path: str) -> str | None:
 
 async def _upload_to_blob_with_sha(blob_path: str, data: bytes, sha: str) -> None:
     """Upload raw file bytes to raw-documents container, tagging with SHA-256."""
-    from azure.identity.aio import AzureCliCredential, ManagedIdentityCredential
-
-    credential = (
-        ManagedIdentityCredential() if os.getenv("RUNNING_IN_AZURE")
-        else AzureCliCredential()
-    )
     async with AsyncBlobClient(
         account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
-        credential=credential,
+        credential=_credential(),
     ) as blob_service:
         container   = blob_service.get_container_client(settings.AZURE_STORAGE_CONTAINER_RAW)
         blob_client = container.get_blob_client(blob_path)
@@ -183,6 +166,61 @@ async def _upload_to_blob_with_sha(blob_path: str, data: bytes, sha: str) -> Non
             metadata={"sha256": sha},   # stored as blob metadata tag
         )
         logger.debug("Uploaded blob: %s (%d bytes) sha256=%s", blob_path, len(data), sha[:12])
+
+
+# ── Delete helpers ────────────────────────────────────────────────────────────
+
+async def _delete_chunks_from_search(doc_name: str) -> int:
+    """
+    Delete every AI Search chunk for doc_name.
+    Returns the number of chunks deleted, or 0 if the document was not found.
+    """
+    from azure.core.credentials import AzureKeyCredential
+    from azure.search.documents.aio import SearchClient
+
+    escaped = doc_name.replace("'", "''")
+    deleted = 0
+
+    async with SearchClient(
+        endpoint=str(settings.AZURE_SEARCH_ENDPOINT),
+        index_name=settings.AZURE_SEARCH_INDEX,
+        credential=AzureKeyCredential(settings.AZURE_SEARCH_API_KEY.get_secret_value()),
+    ) as client:
+        while True:
+            results   = await client.search(
+                search_text="*",
+                filter=f"doc_name eq '{escaped}'",
+                select=["id"],
+                top=1000,
+            )
+            ids = [r["id"] async for r in results]
+            if not ids:
+                break
+            await client.delete_documents(documents=[{"id": i} for i in ids])
+            deleted += len(ids)
+
+    return deleted
+
+
+async def _delete_raw_blob(domain: str, doc_name: str) -> None:
+    """Delete the raw blob for a document. Silently ignores 404 (already gone)."""
+    from azure.core.exceptions import ResourceNotFoundError
+
+    blob_path = f"{domain}/{doc_name}"
+    async with AsyncBlobClient(
+        account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
+        credential=_credential(),
+    ) as blob_service:
+        try:
+            await (
+                blob_service
+                .get_container_client(settings.AZURE_STORAGE_CONTAINER_RAW)
+                .get_blob_client(blob_path)
+                .delete_blob()
+            )
+            logger.info("Deleted raw blob: %s", blob_path)
+        except ResourceNotFoundError:
+            logger.debug("Raw blob already gone: %s", blob_path)
 
 
 # ── Step: process one file ────────────────────────────────────────────────────
@@ -379,25 +417,23 @@ async def ingest_from_logic_app(
 
     # ── Delete path ───────────────────────────────────────────────────────────
     if req.is_delete:
-        processing_task = ProcessingTask(
-            task_id    = task_id,
-            domain     = req.domain,
-            doc_name   = req.doc_name,
-            doc_url    = req.doc_url,
-            file_type  = req.file_type,
-            is_delete  = True,
-        )
-        await send_to_queue(
-            settings.SB_QUEUE_PROCESSING,
-            asdict(processing_task),
-            correlation_id=task_id,
-        )
+        chunks_deleted = await _delete_chunks_from_search(req.doc_name)
+
+        if chunks_deleted == 0:
+            logger.info(
+                "Delete ignored: doc_name=%s not found in AI Search",
+                req.doc_name,
+                extra={"task_id": task_id, "doc_name": req.doc_name},
+            )
+            return {"status": "ignored", "reason": "not_in_index", "doc_name": req.doc_name}
+
+        await _delete_raw_blob(req.domain, req.doc_name)
         logger.info(
-            "Queued delete task for doc_name=%s",
-            req.doc_name,
+            "Deleted doc_name=%s chunks=%d",
+            req.doc_name, chunks_deleted,
             extra={"task_id": task_id, "doc_name": req.doc_name},
         )
-        return {"status": "delete_queued", "doc_name": req.doc_name, "task_id": task_id}
+        return {"status": "deleted", "doc_name": req.doc_name, "chunks_deleted": chunks_deleted}
 
     # ── Upsert path ───────────────────────────────────────────────────────────
     if not req.file_content_base64:
