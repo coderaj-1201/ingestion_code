@@ -1,17 +1,10 @@
 """
-One-off deploy helper: pushes logic_apps/main-workflow.json live via the
+One-off deploy helper: pushes logic_apps/upsert_workflow.json live via the
 ARM REST API directly, bypassing `az logic workflow update`'s shorthand-syntax
 parser (which chokes on this nested JSON on Windows).
 
-The workflow handles both upsert (files modified in the last 7 min) and
-delete detection (snapshot comparison via blob storage) in a single Logic App.
-
-Pre-requisite (one-time): enable system-assigned managed identity on the Logic
-App and grant it Storage Blob Data Contributor on the storage account so it can
-read/write the snapshots/<domain>.json blob.
-
 Usage:
-    python deploy_logic_app.py <logicAppSecret>
+    python deploy_logic_app.py PASTE_NEW_SECRET_HERE
 """
 import json
 import subprocess
@@ -19,13 +12,11 @@ import sys
 
 import requests
 
-SUBSCRIPTION_ID      = "41d22965-fc9f-4e6b-8e10-c70bdba716c9"
-RESOURCE_GROUP       = "rg-aisharedservices-eastus-prod"
-WORKFLOW_NAME        = "lgcapp-aishrdsvcs-eus-prod"
-LOCATION             = "eastus"
-DEFINITION_PATH      = "logic_apps/main-workflow.json"
-STORAGE_ACCOUNT_NAME = "blbstraishrdsvcseusprod"
-INGESTION_AGENT_URL  = "https://bpf2vqkh-8010.inc1.devtunnels.ms"
+SUBSCRIPTION_ID = "41d22965-fc9f-4e6b-8e10-c70bdba716c9"
+RESOURCE_GROUP = "rg-aisharedservices-eastus-prod"
+WORKFLOW_NAME = "lgcapp-aishrdsvcs-eus-prod"
+LOCATION = "eastus"
+DEFINITION_PATH = "logic_apps/upsert-workflow.json"
 
 if len(sys.argv) != 2:
     print("Usage: python deploy_logic_app.py <logicAppSecret>")
@@ -57,12 +48,13 @@ body = {
                     }
                 }
             },
-            "sharepointSiteUrl":  {"value": "https://irondrive.sharepoint.com/sites/OPSPlaybook"},
-            "sharepointLibrary":  {"value": "Global Ops Playbook"},
-            "domain":             {"value": "ops"},
-            "ingestionAgentUrl":  {"value": INGESTION_AGENT_URL},
-            "logicAppSecret":     {"value": logic_app_secret},
-            "storageAccountName": {"value": STORAGE_ACCOUNT_NAME},
+            "sharepointSiteUrl": {"value": "https://irondrive.sharepoint.com/sites/OPSPlaybook"},
+            "sharepointLibrary": {"value": "Global Ops Playbook"},
+            "domain": {"value": "ops"},
+            "ingestionAgentUrl": {
+                "value": "https://cntapp-ingbot-aishrdvcs-eus-prod.mangoisland-637b477f.eastus.azurecontainerapps.io"
+            },
+            "logicAppSecret": {"value": logic_app_secret},
         },
     },
 }
