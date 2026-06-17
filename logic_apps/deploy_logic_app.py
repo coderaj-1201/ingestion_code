@@ -49,7 +49,7 @@ body = {
                 }
             },
             "sharepointSiteUrl": {"value": "https://irondrive.sharepoint.com/sites/OPSPlaybook"},
-            "sharepointLibrary": {"value": "Global Ops Playbook"},
+            "sharepointLibrary": {"value": "Shared Documents"},
             "domain": {"value": "ops"},
             "ingestionAgentUrl": {
                 "value": "https://bpf2vqkh-8010.inc1.devtunnels.ms"
