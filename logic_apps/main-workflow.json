@@ -114,6 +114,7 @@
       "inputs": {
         "method": "GET",
         "uri": "https://@{parameters('storageAccountName')}.blob.core.windows.net/processed-chunks/snapshots/@{parameters('domain')}.json",
+        "headers": { "x-ms-version": "2020-04-08" },
         "authentication": {
           "type": "ManagedServiceIdentity",
           "audience": "https://storage.azure.com/"
@@ -180,6 +181,7 @@
         "method": "PUT",
         "uri": "https://@{parameters('storageAccountName')}.blob.core.windows.net/processed-chunks/snapshots/@{parameters('domain')}.json",
         "headers": {
+          "x-ms-version": "2020-04-08",
           "x-ms-blob-type": "BlockBlob",
           "Content-Type": "application/json"
         },
