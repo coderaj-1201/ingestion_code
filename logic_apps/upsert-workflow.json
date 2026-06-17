@@ -230,6 +230,7 @@
 
     "For_each_deleted_file": {
       "type": "Foreach",
+      "operationOptions": "Parallel",
       "runAfter": {
         "Find_deleted_files": ["Succeeded"]
       },
