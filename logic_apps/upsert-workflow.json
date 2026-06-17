@@ -161,13 +161,24 @@
       }
     },
 
-    "Build_current_names": {
-      "type": "Select",
+    "Filter_to_documents_only": {
+      "type": "Query",
       "runAfter": {
         "Filter_all_to_files_only": ["Succeeded"]
       },
       "inputs": {
         "from": "@body('Filter_all_to_files_only')",
+        "where": "@or(endswith(item()?['{FilenameWithExtension}'], '.pdf'), endswith(item()?['{FilenameWithExtension}'], '.docx'), endswith(item()?['{FilenameWithExtension}'], '.xlsx'), endswith(item()?['{FilenameWithExtension}'], '.pptx'))"
+      }
+    },
+
+    "Build_current_names": {
+      "type": "Select",
+      "runAfter": {
+        "Filter_to_documents_only": ["Succeeded"]
+      },
+      "inputs": {
+        "from": "@body('Filter_to_documents_only')",
         "select": "@item()?['{FilenameWithExtension}']"
       }
     },
