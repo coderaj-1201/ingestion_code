@@ -3,34 +3,13 @@
   "contentVersion": "1.0.0.0",
 
   "parameters": {
-    "$connections": {
-      "defaultValue": {},
-      "type": "Object"
-    },
-    "sharepointSiteUrl": {
-      "defaultValue": "https://<tenant>.sharepoint.com/sites/<site>",
-      "type": "String"
-    },
-    "sharepointLibrary": {
-      "defaultValue": "Shared Documents",
-      "type": "String"
-    },
-    "domain": {
-      "defaultValue": "ops",
-      "type": "String"
-    },
-    "ingestionAgentUrl": {
-      "defaultValue": "https://<ingestion-agent-url>",
-      "type": "String"
-    },
-    "logicAppSecret": {
-      "defaultValue": "",
-      "type": "SecureString"
-    },
-    "storageAccountName": {
-      "defaultValue": "<storage-account-name>",
-      "type": "String"
-    }
+    "$connections":      { "defaultValue": {}, "type": "Object" },
+    "sharepointSiteUrl": { "defaultValue": "https://<tenant>.sharepoint.com/sites/<site>", "type": "String" },
+    "sharepointLibrary": { "defaultValue": "Shared Documents", "type": "String" },
+    "domain":            { "defaultValue": "ops", "type": "String" },
+    "ingestionAgentUrl": { "defaultValue": "https://<ingestion-agent-url>", "type": "String" },
+    "logicAppSecret":    { "defaultValue": "", "type": "SecureString" },
+    "storageAccountName":{ "defaultValue": "<storage-account-name>", "type": "String" }
   },
 
   "triggers": {
@@ -42,35 +21,81 @@
 
   "actions": {
 
-    "Initialize_has_next_page": {
-      "type": "InitializeVariable",
-      "runAfter": {},
-      "inputs": {
-        "variables": [{ "name": "hasNextPage", "type": "boolean", "value": true }]
-      }
-    },
-
-    "Get_all_current_files": {
+    "Get_all_files": {
       "type": "ApiConnection",
-      "runAfter": { "Initialize_has_next_page": ["Succeeded"] },
+      "runAfter": {},
       "inputs": {
         "host": {
           "connection": { "name": "@parameters('$connections')['sharepointonline']['connectionId']" }
         },
         "method": "get",
         "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
-        "queries": {
-          "$top": 500
-        }
+        "queries": { "$top": 500 }
       }
     },
 
     "Filter_files_only": {
       "type": "Query",
-      "runAfter": { "Get_all_current_files": ["Succeeded"] },
+      "runAfter": { "Get_all_files": ["Succeeded"] },
       "inputs": {
-        "from": "@body('Get_all_current_files')?['value']",
+        "from": "@body('Get_all_files')?['value']",
         "where": "@not(equals(item()?['{IsFolder}'], true))"
+      }
+    },
+
+    "Filter_recently_modified": {
+      "type": "Query",
+      "runAfter": { "Filter_files_only": ["Succeeded"] },
+      "inputs": {
+        "from": "@body('Filter_files_only')",
+        "where": "@greaterOrEquals(item()?['Modified'], addMinutes(utcNow(), -7))"
+      }
+    },
+
+    "For_each_changed_file": {
+      "type": "Foreach",
+      "runAfter": { "Filter_recently_modified": ["Succeeded"] },
+      "foreach": "@body('Filter_recently_modified')",
+      "actions": {
+        "Get_file_content": {
+          "type": "ApiConnection",
+          "runAfter": {},
+          "inputs": {
+            "host": {
+              "connection": { "name": "@parameters('$connections')['sharepointonline']['connectionId']" }
+            },
+            "method": "get",
+            "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/GetFileContentByPath",
+            "queries": { "path": "@{concat('/', item()?['{FullPath}'])}", "inferContentType": false }
+          }
+        },
+        "Send_to_Ingestion_Agent": {
+          "type": "Http",
+          "runAfter": { "Get_file_content": ["Succeeded"] },
+          "inputs": {
+            "method": "POST",
+            "uri": "@{parameters('ingestionAgentUrl')}/ingest/from-logic-app",
+            "headers": {
+              "Content-Type": "application/json",
+              "X-Logic-App-Secret": "@parameters('logicAppSecret')"
+            },
+            "body": {
+              "doc_name":            "@{item()?['{FilenameWithExtension}']}",
+              "doc_url":             "@{item()?['{Link}']}",
+              "domain":              "@parameters('domain')",
+              "file_type":           "@{last(split(item()?['{FilenameWithExtension}'], '.'))}",
+              "file_content_base64": "@{base64(body('Get_file_content'))}",
+              "is_delete":           false
+            },
+            "retryPolicy": {
+              "type": "exponential",
+              "count": 4,
+              "interval": "PT10S",
+              "minimumInterval": "PT10S",
+              "maximumInterval": "PT1H"
+            }
+          }
+        }
       }
     },
 
@@ -101,10 +126,7 @@
       "runAfter": { "Read_snapshot": ["Succeeded", "Failed"] },
       "inputs": {
         "content": "@if(equals(outputs('Read_snapshot')['statusCode'], 200), body('Read_snapshot'), json('[]'))",
-        "schema": {
-          "type": "array",
-          "items": { "type": "string" }
-        }
+        "schema": { "type": "array", "items": { "type": "string" } }
       }
     },
 
@@ -132,12 +154,12 @@
               "X-Logic-App-Secret": "@parameters('logicAppSecret')"
             },
             "body": {
-              "doc_name": "@{item()}",
-              "doc_url":  "",
-              "domain":   "@parameters('domain')",
-              "file_type": "@{last(split(item(), '.'))}",
+              "doc_name":            "@{item()}",
+              "doc_url":             "",
+              "domain":              "@parameters('domain')",
+              "file_type":           "@{last(split(item(), '.'))}",
               "file_content_base64": "",
-              "is_delete": true
+              "is_delete":           true
             },
             "retryPolicy": {
               "type": "exponential",

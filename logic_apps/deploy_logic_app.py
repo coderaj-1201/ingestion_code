@@ -1,10 +1,17 @@
 """
-One-off deploy helper: pushes logic_apps/upsert_workflow.json live via the
+One-off deploy helper: pushes logic_apps/main-workflow.json live via the
 ARM REST API directly, bypassing `az logic workflow update`'s shorthand-syntax
 parser (which chokes on this nested JSON on Windows).
 
+The workflow handles both upsert (files modified in the last 7 min) and
+delete detection (snapshot comparison via blob storage) in a single Logic App.
+
+Pre-requisite (one-time): enable system-assigned managed identity on the Logic
+App and grant it Storage Blob Data Contributor on the storage account so it can
+read/write the snapshots/<domain>.json blob.
+
 Usage:
-    python deploy_logic_app.py PASTE_NEW_SECRET_HERE
+    python deploy_logic_app.py <logicAppSecret> <storageAccountName>
 """
 import json
 import subprocess
@@ -16,13 +23,14 @@ SUBSCRIPTION_ID = "41d22965-fc9f-4e6b-8e10-c70bdba716c9"
 RESOURCE_GROUP = "rg-aisharedservices-eastus-prod"
 WORKFLOW_NAME = "lgcapp-aishrdsvcs-eus-prod"
 LOCATION = "eastus"
-DEFINITION_PATH = "logic_apps/upsert-workflow.json"
+DEFINITION_PATH = "logic_apps/main-workflow.json"
 
-if len(sys.argv) != 2:
-    print("Usage: python deploy_logic_app.py <logicAppSecret>")
+if len(sys.argv) != 3:
+    print("Usage: python deploy_logic_app.py <logicAppSecret> <storageAccountName>")
     sys.exit(1)
 
-logic_app_secret = sys.argv[1]
+logic_app_secret     = sys.argv[1]
+storage_account_name = sys.argv[2]
 
 with open(DEFINITION_PATH, "r", encoding="utf-8") as f:
     definition = json.load(f)
@@ -54,7 +62,8 @@ body = {
             "ingestionAgentUrl": {
                 "value": "https://cntapp-ingbot-aishrdvcs-eus-prod.mangoisland-637b477f.eastus.azurecontainerapps.io"
             },
-            "logicAppSecret": {"value": logic_app_secret},
+            "logicAppSecret":     {"value": logic_app_secret},
+            "storageAccountName": {"value": storage_account_name},
         },
     },
 }
