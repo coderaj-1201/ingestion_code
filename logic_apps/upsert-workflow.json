@@ -133,20 +133,78 @@
       }
     },
 
-    "Get_all_items": {
-      "type": "ApiConnection",
+    "Initialize_doc_items": {
+      "type": "InitializeVariable",
       "runAfter": {},
       "inputs": {
-        "host": {
-          "connection": {
-            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+        "variables": [{"name": "docItems", "type": "array", "value": []}]
+      }
+    },
+
+    "Initialize_skip_count": {
+      "type": "InitializeVariable",
+      "runAfter": {"Initialize_doc_items": ["Succeeded"]},
+      "inputs": {
+        "variables": [{"name": "skipCount", "type": "integer", "value": 0}]
+      }
+    },
+
+    "Initialize_has_more": {
+      "type": "InitializeVariable",
+      "runAfter": {"Initialize_skip_count": ["Succeeded"]},
+      "inputs": {
+        "variables": [{"name": "hasMore", "type": "boolean", "value": true}]
+      }
+    },
+
+    "Paginate_all_documents": {
+      "type": "Until",
+      "runAfter": {"Initialize_has_more": ["Succeeded"]},
+      "expression": "@equals(variables('hasMore'), false)",
+      "limit": {"count": 10, "timeout": "PT10M"},
+      "actions": {
+        "Get_document_page": {
+          "type": "ApiConnection",
+          "runAfter": {},
+          "inputs": {
+            "host": {
+              "connection": {
+                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+              }
+            },
+            "method": "get",
+            "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
+            "queries": {
+              "$filter": "FSObjType eq 0 and (substringof('.pdf', FileLeafRef) or substringof('.docx', FileLeafRef) or substringof('.xlsx', FileLeafRef) or substringof('.pptx', FileLeafRef))",
+              "$orderby": "ID asc",
+              "$top": 500,
+              "$skip": "@variables('skipCount')"
+            }
           }
         },
-        "method": "get",
-        "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
-        "queries": {
-          "$filter": "FSObjType eq 0 and (substringof('.pdf', FileLeafRef) or substringof('.docx', FileLeafRef) or substringof('.xlsx', FileLeafRef) or substringof('.pptx', FileLeafRef))",
-          "$top": 500
+        "Append_page_to_doc_items": {
+          "type": "SetVariable",
+          "runAfter": {"Get_document_page": ["Succeeded"]},
+          "inputs": {
+            "name": "docItems",
+            "value": "@concat(variables('docItems'), body('Get_document_page')?['value'])"
+          }
+        },
+        "Increment_skip_count": {
+          "type": "SetVariable",
+          "runAfter": {"Append_page_to_doc_items": ["Succeeded"]},
+          "inputs": {
+            "name": "skipCount",
+            "value": "@add(variables('skipCount'), 500)"
+          }
+        },
+        "Set_has_more": {
+          "type": "SetVariable",
+          "runAfter": {"Increment_skip_count": ["Succeeded"]},
+          "inputs": {
+            "name": "hasMore",
+            "value": "@greaterOrEquals(length(body('Get_document_page')?['value']), 500)"
+          }
         }
       }
     },
@@ -154,10 +212,10 @@
     "Filter_all_to_files_only": {
       "type": "Query",
       "runAfter": {
-        "Get_all_items": ["Succeeded"]
+        "Paginate_all_documents": ["Succeeded"]
       },
       "inputs": {
-        "from": "@body('Get_all_items')?['value']",
+        "from": "@variables('docItems')",
         "where": "@not(equals(item()?['{IsFolder}'], true))"
       }
     },
