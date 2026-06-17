@@ -145,8 +145,7 @@
         "method": "get",
         "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
         "queries": {
-          "$filter": "Modified ge datetime'2000-01-01T00:00:00Z'",
-          "$orderby": "Modified desc",
+          "$filter": "FSObjType eq 0 and (substringof('.pdf', FileLeafRef) or substringof('.docx', FileLeafRef) or substringof('.xlsx', FileLeafRef) or substringof('.pptx', FileLeafRef))",
           "$top": 500
         }
       }
