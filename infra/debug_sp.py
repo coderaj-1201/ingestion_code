@@ -2,7 +2,7 @@ import subprocess
 import requests
 
 token = subprocess.check_output(
-    "az account get-access-token --resource https://irondrive.sharepoint.com --query accessToken -o tsv",
+    'az account get-access-token --resource "https://irondrive.sharepoint.com" --query accessToken -o tsv',
     shell=True, text=True
 ).strip()
 
