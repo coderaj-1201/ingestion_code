@@ -12,6 +12,8 @@ For each task:
   5. Send EmbeddingTask to SB embedding-tasks queue
 
 On delete signal:
+  → Delete raw blob (raw-documents/<domain>/<filename>)
+  → Delete processed blob (processed-chunks/<domain>/<filename>.json)
   → Forward delete to embedding-tasks queue (Embedding Agent handles index cleanup)
 """
 from __future__ import annotations
@@ -65,6 +67,25 @@ async def _upload_blob(container: str, blob_path: str, data: bytes) -> None:
         blob = svc.get_container_client(container).get_blob_client(blob_path)
         await blob.upload_blob(data, overwrite=True)
         logger.debug("Uploaded processed blob: %s", blob_path)
+
+
+async def _delete_blobs(domain: str, doc_name: str) -> None:
+    """Delete raw and processed blobs for a document. Ignores 404s (already gone)."""
+    raw_path       = f"{domain}/{doc_name}"
+    processed_path = f"{domain}/{doc_name}.json"
+    async with await _get_blob_client() as svc:
+        for container, path in [
+            (settings.AZURE_STORAGE_CONTAINER_RAW, raw_path),
+            (settings.AZURE_STORAGE_CONTAINER_PROCESSED, processed_path),
+        ]:
+            try:
+                await svc.get_container_client(container).get_blob_client(path).delete_blob()
+                logger.info("Deleted blob %s/%s", container, path)
+            except Exception as exc:
+                if "BlobNotFound" in type(exc).__name__ or "ResourceNotFoundError" in type(exc).__name__:
+                    logger.debug("Blob already gone: %s/%s", container, path)
+                else:
+                    raise
 
 
 
@@ -186,7 +207,8 @@ async def queue_embedding_task(task: ProcessingTask, processed_blob_path: str, c
 @workflow(name="processing_workflow")
 async def processing_workflow(task: ProcessingTask) -> dict:
     if task.is_delete:
-        # Forward delete signal directly to embedding queue for index cleanup
+        await _delete_blobs(task.domain, task.doc_name)
+        # Forward delete signal to embedding queue for AI Search index cleanup
         await queue_embedding_task(task, "", 0)
         return {"status": "delete_forwarded", "doc_name": task.doc_name}
 
