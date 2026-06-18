@@ -153,18 +153,30 @@ async def download_raw_file(task: ProcessingTask) -> bytes:
     return await _download_blob(settings.AZURE_STORAGE_CONTAINER_RAW, f"{task.domain}/{task.doc_name}")
 
 
+_PARSER_TIMEOUT_SECONDS = 300  # 5 min hard cap; corrupted files can hang LLM retries
+
+
 @step
 async def run_parser(file_bytes: bytes, task: ProcessingTask) -> list[RawChunk]:
     logger.info("Parsing %s (%s)", task.doc_name, task.file_type,
                 extra={"task_id": task.task_id, "doc_name": task.doc_name})
-    chunks = await asyncio.to_thread(
-        parse_document,
-        file_bytes,
-        task.doc_name,
-        task.doc_url,
-        task.domain,
-        f"{task.domain}/{task.doc_name}",
-    )
+    try:
+        chunks = await asyncio.wait_for(
+            asyncio.to_thread(
+                parse_document,
+                file_bytes,
+                task.doc_name,
+                task.doc_url,
+                task.domain,
+                f"{task.domain}/{task.doc_name}",
+            ),
+            timeout=_PARSER_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        raise RuntimeError(
+            f"Parser timed out after {_PARSER_TIMEOUT_SECONDS}s for doc_name={task.doc_name} "
+            f"— file may be corrupted or contain content that causes LLM retries to stall"
+        )
     # Stamp SHA-256 onto every chunk so it's queryable in AI Search
     if task.file_sha256:
         for chunk in chunks:
