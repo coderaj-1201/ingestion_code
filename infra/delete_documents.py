@@ -2,10 +2,19 @@
 Delete documents from Azure Blob Storage and AI Search.
 
 Usage:
+    # delete specific files by name (domain/filename or just filename):
+    python infra/delete_documents.py "ops/My Report.pdf" "ops/Other File.docx"
+
+    # delete just from AI Search (skip blob):
+    python infra/delete_documents.py --search-only "ops/My Report.pdf"
+
+    # delete just from blob (skip AI Search):
+    python infra/delete_documents.py --blob-only "ops/My Report.pdf"
+
+    # fall back to the hardcoded DOC_NAMES list below (no args):
     python infra/delete_documents.py
 
-Reads credentials from .env file in the current directory.
-Edit DOC_NAMES below to specify which documents to delete.
+Reads credentials from .env or existing environment variables.
 """
 from __future__ import annotations
 
@@ -14,11 +23,9 @@ import sys
 from pathlib import Path
 
 
-# ── Documents to delete ───────────────────────────────────────────────────────
+# ── Fallback list (used only when no CLI args are given) ─────────────────────
 DOC_NAMES: list[str] = [
-    "ops/SOP 10 01 001 About the Playbook.pdf",
-    "ops/SOP 10 01 002 SOP Playbook Rollout.pdf",
-    "ops/SOP 10 01 003 SOP Editing Guidelines.pdf",
+    # "ops/SOP 10 01 001 About the Playbook.pdf",
 ]
 
 
@@ -144,15 +151,26 @@ def _handle_not_found(exc: Exception, label: str) -> None:
 if __name__ == "__main__":
     _load_env()
 
-    print(f"\nDocuments to delete ({len(DOC_NAMES)}):")
-    for d in DOC_NAMES:
+    args = sys.argv[1:]
+    search_only = "--search-only" in args
+    blob_only   = "--blob-only"   in args
+    doc_names   = [a for a in args if not a.startswith("--")] or DOC_NAMES
+
+    if not doc_names:
+        sys.exit("[ERROR] No documents specified. Pass filenames as arguments or edit DOC_NAMES.")
+
+    print(f"\nDocuments to delete ({len(doc_names)}):")
+    for d in doc_names:
         print(f"  • {d}")
     print()
 
-    print("=== Blob Storage ===")
-    delete_blobs(DOC_NAMES)
+    if not blob_only:
+        print("=== AI Search ===")
+        delete_from_search(doc_names)
+        print()
 
-    print("\n=== AI Search ===")
-    delete_from_search(DOC_NAMES)
+    if not search_only:
+        print("=== Blob Storage ===")
+        delete_blobs(doc_names)
 
     print("\nDone.")
