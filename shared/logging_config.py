@@ -52,6 +52,7 @@ def configure_logging(service_name: str = "ingestion") -> None:
         "httpcore",
         "urllib3",
         "asyncio",        # suppress "Unclosed client session" from azure credential cleanup
+        "msal",           # suppress token_cache DEBUG noise
     ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     if settings.APPLICATIONINSIGHTS_CONNECTION_STRING:
