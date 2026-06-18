@@ -43,7 +43,16 @@ def configure_logging(service_name: str = "ingestion") -> None:
     root.setLevel(level)
     root.handlers.clear()
     root.addHandler(handler)
-    for noisy in ("azure.core", "azure.identity", "httpx", "httpcore", "urllib3"):
+    for noisy in (
+        "azure.core",
+        "azure.identity",
+        "azure.servicebus._pyamqp",
+        "uamqp",
+        "httpx",
+        "httpcore",
+        "urllib3",
+        "asyncio",        # suppress "Unclosed client session" from azure credential cleanup
+    ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     if settings.APPLICATIONINSIGHTS_CONNECTION_STRING:
         try:
