@@ -270,11 +270,39 @@ async def processing_workflow(task: ProcessingTask) -> dict:
 
 # ── Service Bus listener ──────────────────────────────────────────────────────
 
+_PROCESSING_CONCURRENCY = 4  # max docs parsed in parallel per container instance
+
+
+async def _process_one(receiver, msg, semaphore: asyncio.Semaphore) -> None:
+    """Process a single Service Bus message under the concurrency semaphore."""
+    async with semaphore:
+        payload = None
+        try:
+            payload    = json.loads(b"".join(msg.body))
+            task       = ProcessingTask(**payload)
+            result_obj = await processing_workflow.run(task)
+            outputs    = result_obj.get_outputs()
+            result     = outputs[0] if outputs else {}
+            logger.info("Processed: %s", result)
+            await receiver.complete_message(msg)
+        except Exception as exc:
+            doc_name = payload.get("doc_name", "unknown") if payload else "unknown"
+            task_id  = payload.get("task_id",  "")        if payload else ""
+            domain   = payload.get("domain",   "")        if payload else ""
+            logger.error(
+                "Processing failed doc_name=%s: %s", doc_name, exc, exc_info=True,
+                extra={"task_id": task_id, "doc_name": doc_name, "domain": domain},
+            )
+            await receiver.abandon_message(msg)
+
+
 async def _sb_listener():
-    """Consume processing-tasks queue continuously."""
+    """Consume processing-tasks queue continuously with concurrent message handling."""
     logger.info("Processing Agent SB listener starting on queue '%s'", settings.SB_QUEUE_PROCESSING)
     from azure.servicebus.aio import ServiceBusClient as AsyncSBClient
     from azure.identity.aio import AzureCliCredential, ManagedIdentityCredential
+
+    semaphore = asyncio.Semaphore(_PROCESSING_CONCURRENCY)
 
     while True:
         try:
@@ -291,29 +319,20 @@ async def _sb_listener():
                     fully_qualified_namespace=settings.AZURE_SERVICE_BUS_NAMESPACE,
                     credential=credential,
                 )
+            tasks: set[asyncio.Task] = set()
             async with sb:
                 async with sb.get_queue_receiver(
-                    settings.SB_QUEUE_PROCESSING, max_wait_time=30
+                    settings.SB_QUEUE_PROCESSING,
+                    max_wait_time=30,
+                    prefetch_count=_PROCESSING_CONCURRENCY,
                 ) as receiver:
                     async for msg in receiver:
-                        try:
-                            payload = json.loads(b"".join(msg.body))
-                            task    = ProcessingTask(**payload)
-                            result_obj = await processing_workflow.run(task)
-                            outputs    = result_obj.get_outputs()
-                            result     = outputs[0] if outputs else {}
-                            logger.info("Processed: %s", result)
-                            await receiver.complete_message(msg)
-                        except Exception as exc:
-                            # payload may not be defined if json.loads itself failed
-                            doc_name = payload.get("doc_name", "unknown") if "payload" in locals() else "unknown"
-                            task_id  = payload.get("task_id",  "")        if "payload" in locals() else ""
-                            domain   = payload.get("domain",   "")        if "payload" in locals() else ""
-                            logger.error(
-                                "Processing failed doc_name=%s: %s", doc_name, exc, exc_info=True,
-                                extra={"task_id": task_id, "doc_name": doc_name, "domain": domain},
-                            )
-                            await receiver.abandon_message(msg)
+                        t = asyncio.create_task(_process_one(receiver, msg, semaphore))
+                        tasks.add(t)
+                        t.add_done_callback(tasks.discard)
+                    # drain remaining tasks before the receiver closes
+                    if tasks:
+                        await asyncio.gather(*tasks, return_exceptions=True)
         except Exception as exc:
             logger.error("SB listener crashed, restarting in 5s: %s", exc, exc_info=True)
             await asyncio.sleep(5)

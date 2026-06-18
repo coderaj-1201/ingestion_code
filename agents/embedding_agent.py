@@ -266,10 +266,45 @@ async def embedding_workflow(task: dict) -> dict:
 
 # ── Service Bus listener ──────────────────────────────────────────────────────
 
+_EMBEDDING_CONCURRENCY = 4  # max docs embedded in parallel per container instance
+
+
+async def _embed_one(receiver, msg, semaphore: asyncio.Semaphore) -> None:
+    """Process a single Service Bus message under the concurrency semaphore."""
+    async with semaphore:
+        task = None
+        try:
+            task       = json.loads(b"".join(msg.body))
+            result_obj = await embedding_workflow.run(task)
+            outputs    = result_obj.get_outputs()
+            result     = outputs[0] if outputs else {}
+            logger.info(
+                "Embedding complete doc_name=%s status=%s uploaded=%s parents=%s",
+                result.get("doc_name"), result.get("status"),
+                result.get("uploaded"), result.get("parent_chunks"),
+                extra={
+                    "task_id":  task.get("task_id"),
+                    "doc_name": result.get("doc_name"),
+                },
+            )
+            await receiver.complete_message(msg)
+        except Exception as exc:
+            doc_name = task.get("doc_name", "unknown") if task else "unknown"
+            task_id  = task.get("task_id",  "")        if task else ""
+            domain   = task.get("domain",   "")        if task else ""
+            logger.error(
+                "Embedding failed doc_name=%s: %s", doc_name, exc, exc_info=True,
+                extra={"task_id": task_id, "doc_name": doc_name, "domain": domain},
+            )
+            await receiver.abandon_message(msg)
+
+
 async def _sb_listener():
     logger.info("Embedding Agent SB listener starting on queue '%s'", settings.SB_QUEUE_EMBEDDING)
     from azure.identity.aio import AzureCliCredential, ManagedIdentityCredential
     from azure.servicebus.aio import ServiceBusClient as AsyncSBClient
+
+    semaphore = asyncio.Semaphore(_EMBEDDING_CONCURRENCY)
 
     while True:
         try:
@@ -286,35 +321,19 @@ async def _sb_listener():
                     fully_qualified_namespace=settings.AZURE_SERVICE_BUS_NAMESPACE,
                     credential=credential,
                 )
+            tasks: set[asyncio.Task] = set()
             async with sb:
                 async with sb.get_queue_receiver(
-                    settings.SB_QUEUE_EMBEDDING, max_wait_time=30
+                    settings.SB_QUEUE_EMBEDDING,
+                    max_wait_time=30,
+                    prefetch_count=_EMBEDDING_CONCURRENCY,
                 ) as receiver:
                     async for msg in receiver:
-                        task = None
-                        try:
-                            task       = json.loads(b"".join(msg.body))
-                            result_obj = await embedding_workflow.run(task)
-                            outputs    = result_obj.get_outputs()
-                            result     = outputs[0] if outputs else {}
-                            logger.info(
-                                "Embedding complete doc_name=%s status=%s uploaded=%s",
-                                result.get("doc_name"), result.get("status"), result.get("uploaded"),
-                                extra={
-                                    "task_id":  task.get("task_id"),
-                                    "doc_name": result.get("doc_name"),
-                                },
-                            )
-                            await receiver.complete_message(msg)
-                        except Exception as exc:
-                            doc_name = task.get("doc_name", "unknown") if task else "unknown"
-                            task_id  = task.get("task_id",  "")        if task else ""
-                            domain   = task.get("domain",   "")        if task else ""
-                            logger.error(
-                                "Embedding failed doc_name=%s: %s", doc_name, exc, exc_info=True,
-                                extra={"task_id": task_id, "doc_name": doc_name, "domain": domain},
-                            )
-                            await receiver.abandon_message(msg)
+                        t = asyncio.create_task(_embed_one(receiver, msg, semaphore))
+                        tasks.add(t)
+                        t.add_done_callback(tasks.discard)
+                    if tasks:
+                        await asyncio.gather(*tasks, return_exceptions=True)
         except Exception as exc:
             logger.error("SB listener crashed, restarting in 5s: %s", exc, exc_info=True)
             await asyncio.sleep(5)
