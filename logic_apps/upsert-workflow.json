@@ -161,7 +161,7 @@
       "type": "Until",
       "runAfter": {"Initialize_has_more": ["Succeeded"]},
       "expression": "@equals(variables('hasMore'), false)",
-      "limit": {"count": 10, "timeout": "PT10M"},
+      "limit": {"count": 20, "timeout": "PT15M"},
       "actions": {
         "Get_document_page": {
           "type": "ApiConnection",
@@ -175,7 +175,7 @@
             "method": "get",
             "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
             "queries": {
-              "$filter": "FSObjType eq 0 and (substringof('.pdf', FileLeafRef) or substringof('.docx', FileLeafRef) or substringof('.xlsx', FileLeafRef) or substringof('.pptx', FileLeafRef))",
+              "$filter": "FSObjType eq 0",
               "$orderby": "ID asc",
               "$top": 500,
               "$skip": "@variables('skipCount')"
@@ -203,7 +203,7 @@
           "runAfter": {"Increment_skip_count": ["Succeeded"]},
           "inputs": {
             "name": "hasMore",
-            "value": "@greaterOrEquals(length(body('Get_document_page')?['value']), 500)"
+            "value": "@greater(length(body('Get_document_page')?['value']), 499)"
           }
         }
       }
@@ -274,72 +274,109 @@
       }
     },
 
-    "Find_deleted_files": {
-      "type": "Query",
+    "Check_snapshot_safety": {
+      "type": "If",
       "runAfter": {
         "Parse_snapshot": ["Succeeded"]
       },
-      "inputs": {
-        "from": "@body('Parse_snapshot')",
-        "where": "@not(contains(body('Build_current_names'), item()))"
-      }
-    },
-
-    "For_each_deleted_file": {
-      "type": "Foreach",
-      "operationOptions": "Parallel",
-      "runAfter": {
-        "Find_deleted_files": ["Succeeded"]
+      "expression": {
+        "or": [
+          {
+            "equals": ["@length(body('Parse_snapshot'))", 0]
+          },
+          {
+            "greaterOrEquals": [
+              "@mul(length(body('Build_current_names')), 10)",
+              "@mul(length(body('Parse_snapshot')), 8)"
+            ]
+          }
+        ]
       },
-      "foreach": "@body('Find_deleted_files')",
       "actions": {
-        "Send_delete_to_Ingestion_Agent": {
-          "type": "Http",
+
+        "Find_deleted_files": {
+          "type": "Query",
           "runAfter": {},
           "inputs": {
-            "method": "POST",
-            "uri": "@{parameters('ingestionAgentUrl')}/ingest/from-logic-app",
+            "from": "@body('Parse_snapshot')",
+            "where": "@not(contains(body('Build_current_names'), item()))"
+          }
+        },
+
+        "For_each_deleted_file": {
+          "type": "Foreach",
+          "operationOptions": "Parallel",
+          "runAfter": {
+            "Find_deleted_files": ["Succeeded"]
+          },
+          "foreach": "@body('Find_deleted_files')",
+          "actions": {
+            "Send_delete_to_Ingestion_Agent": {
+              "type": "Http",
+              "runAfter": {},
+              "inputs": {
+                "method": "POST",
+                "uri": "@{parameters('ingestionAgentUrl')}/ingest/from-logic-app",
+                "headers": {
+                  "Content-Type": "application/json",
+                  "X-Logic-App-Secret": "@parameters('logicAppSecret')"
+                },
+                "body": {
+                  "doc_name": "@{item()}",
+                  "doc_url": "",
+                  "domain": "@parameters('domain')",
+                  "file_type": "@{last(split(item(), '.'))}",
+                  "file_content_base64": "",
+                  "is_delete": true
+                },
+                "retryPolicy": {
+                  "type": "exponential",
+                  "count": 4,
+                  "interval": "PT10S",
+                  "minimumInterval": "PT10S",
+                  "maximumInterval": "PT1H"
+                }
+              }
+            }
+          }
+        },
+
+        "Save_snapshot": {
+          "type": "Http",
+          "runAfter": {
+            "For_each_deleted_file": ["Succeeded", "Skipped"]
+          },
+          "inputs": {
+            "method": "PUT",
+            "uri": "https://@{parameters('storageAccountName')}.blob.core.windows.net/processed-chunks/snapshots/@{parameters('domain')}.json",
             "headers": {
-              "Content-Type": "application/json",
-              "X-Logic-App-Secret": "@parameters('logicAppSecret')"
+              "x-ms-version": "2020-04-08",
+              "x-ms-blob-type": "BlockBlob",
+              "Content-Type": "application/json"
             },
-            "body": {
-              "doc_name": "@{item()}",
-              "doc_url": "",
-              "domain": "@parameters('domain')",
-              "file_type": "@{last(split(item(), '.'))}",
-              "file_content_base64": "",
-              "is_delete": true
-            },
-            "retryPolicy": {
-              "type": "exponential",
-              "count": 4,
-              "interval": "PT10S",
-              "minimumInterval": "PT10S",
-              "maximumInterval": "PT1H"
+            "body": "@body('Build_current_names')",
+            "authentication": {
+              "type": "ManagedServiceIdentity",
+              "audience": "https://storage.azure.com/"
             }
           }
         }
-      }
-    },
 
-    "Save_snapshot": {
-      "type": "Http",
-      "runAfter": {
-        "For_each_deleted_file": ["Succeeded", "Skipped", "Failed"]
       },
-      "inputs": {
-        "method": "PUT",
-        "uri": "https://@{parameters('storageAccountName')}.blob.core.windows.net/processed-chunks/snapshots/@{parameters('domain')}.json",
-        "headers": {
-          "x-ms-version": "2020-04-08",
-          "x-ms-blob-type": "BlockBlob",
-          "Content-Type": "application/json"
-        },
-        "body": "@body('Build_current_names')",
-        "authentication": {
-          "type": "ManagedServiceIdentity",
-          "audience": "https://storage.azure.com/"
+
+      "else": {
+        "actions": {
+          "Abort_unsafe_snapshot": {
+            "type": "Terminate",
+            "runAfter": {},
+            "inputs": {
+              "runStatus": "Failed",
+              "runError": {
+                "code": "SnapshotSafetyAbort",
+                "message": "Aborting delete run: current file count (@{length(body('Build_current_names'))}) is less than 80% of snapshot count (@{length(body('Parse_snapshot'))}). SharePoint may have returned a truncated result. Snapshot NOT updated."
+              }
+            }
+          }
         }
       }
     }
