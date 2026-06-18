@@ -185,7 +185,7 @@
         "Compose_merged_doc_items": {
           "type": "Compose",
           "runAfter": {"Get_document_page": ["Succeeded"]},
-          "inputs": "@concat(variables('docItems'), body('Get_document_page')?['value'])"
+          "inputs": "@union(variables('docItems'), body('Get_document_page')?['value'])"
         },
         "Append_page_to_doc_items": {
           "type": "SetVariable",
