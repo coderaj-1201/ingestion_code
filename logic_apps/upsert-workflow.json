@@ -195,12 +195,17 @@
             "value": "@outputs('Compose_merged_doc_items')"
           }
         },
+        "Compose_new_skip_count": {
+          "type": "Compose",
+          "runAfter": {"Append_page_to_doc_items": ["Succeeded"]},
+          "inputs": "@add(variables('skipCount'), 500)"
+        },
         "Increment_skip_count": {
           "type": "SetVariable",
-          "runAfter": {"Append_page_to_doc_items": ["Succeeded"]},
+          "runAfter": {"Compose_new_skip_count": ["Succeeded"]},
           "inputs": {
             "name": "skipCount",
-            "value": "@add(variables('skipCount'), 500)"
+            "value": "@outputs('Compose_new_skip_count')"
           }
         },
         "Set_has_more": {
