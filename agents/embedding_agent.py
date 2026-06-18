@@ -186,13 +186,13 @@ async def delete_from_search(doc_name: str) -> int:
 
 # ── Workflow ──────────────────────────────────────────────────────────────────
 
-@workflow(name="embedding_workflow")
-async def embedding_workflow(task: dict) -> dict:
+async def _run_embedding(task: dict) -> dict:
+    """Core embedding logic. Called directly by the SB listener (concurrent-safe)."""
     doc_name  = task["doc_name"]
     is_delete = task.get("is_delete", False)
 
     logger.info(
-        "embedding_workflow doc_name=%s is_delete=%s",
+        "embedding doc_name=%s is_delete=%s",
         doc_name, is_delete,
         extra={"task_id": task.get("task_id"), "doc_name": doc_name},
     )
@@ -201,15 +201,12 @@ async def embedding_workflow(task: dict) -> dict:
         deleted = await delete_from_search(doc_name)
         return {"status": "deleted", "doc_name": doc_name, "deleted_chunks": deleted}
 
-    # Download processed chunks from Blob
     chunks = await _download_processed_chunks(task["processed_blob_path"])
 
     if not chunks:
         logger.warning("No chunks found in blob for doc_name=%s", doc_name)
         return {"status": "empty", "doc_name": doc_name}
 
-    # Only embed child chunks (parent_id != "")
-    # Parents are stored for context but not embedded/searched directly
     child_chunks  = [c for c in chunks if c.parent_id != ""]
     parent_chunks = [c for c in chunks if c.parent_id == ""]
 
@@ -219,7 +216,6 @@ async def embedding_workflow(task: dict) -> dict:
         extra={"chunk_count": len(chunks), "doc_name": doc_name},
     )
 
-    # Embed children
     t_embed           = time.monotonic()
     embedded_children = await embed_chunks(child_chunks)
     logger.info(
@@ -228,16 +224,12 @@ async def embedding_workflow(task: dict) -> dict:
         extra={"doc_name": doc_name, "task_id": task.get("task_id")},
     )
 
-    # Also store parents in Search (no vector — used for context retrieval by parent_id)
     parent_docs = []
     for parent in parent_chunks:
         doc = parent.to_search_doc()
-        doc["content_vector"] = []   # empty — parents not vector-searched
+        doc["content_vector"] = []
         parent_docs.append(doc)
 
-    # Upload parents first — children reference them via parent_id, so a failed
-    # parent upload would leave the index in an inconsistent state. Raise here
-    # so the Service Bus message is abandoned and retried rather than completed.
     if parent_docs:
         parent_results = await asyncio.to_thread(
             get_search_client().upload_documents, parent_docs
@@ -245,7 +237,6 @@ async def embedding_workflow(task: dict) -> dict:
         _check_upload_results(parent_results, f"parent chunks for {doc_name}")
         logger.debug("Uploaded %d parent chunks for doc_name=%s", len(parent_docs), doc_name)
 
-    # Upload embedded children
     t_upload = time.monotonic()
     uploaded = await upload_to_search(embedded_children, doc_name)
     logger.info(
@@ -264,6 +255,12 @@ async def embedding_workflow(task: dict) -> dict:
     }
 
 
+@workflow(name="embedding_workflow")
+async def embedding_workflow(task: dict) -> dict:
+    """MAF workflow wrapper — do not call .run() concurrently; use _run_embedding directly."""
+    return await _run_embedding(task)
+
+
 # ── Service Bus listener ──────────────────────────────────────────────────────
 
 _EMBEDDING_CONCURRENCY = 4  # max docs embedded in parallel per container instance
@@ -274,10 +271,8 @@ async def _embed_one(receiver, msg, semaphore: asyncio.Semaphore) -> None:
     async with semaphore:
         task = None
         try:
-            task       = json.loads(b"".join(msg.body))
-            result_obj = await embedding_workflow.run(task)
-            outputs    = result_obj.get_outputs()
-            result     = outputs[0] if outputs else {}
+            task   = json.loads(b"".join(msg.body))
+            result = await _run_embedding(task)
             logger.info(
                 "Embedding complete doc_name=%s status=%s uploaded=%s parents=%s",
                 result.get("doc_name"), result.get("status"),

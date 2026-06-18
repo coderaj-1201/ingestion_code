@@ -214,13 +214,12 @@ async def queue_embedding_task(task: ProcessingTask, processed_blob_path: str, c
                 extra={"task_id": task.task_id})
 
 
-# ── Workflow ──────────────────────────────────────────────────────────────────
+# ── Workflow logic (plain async — safe to call concurrently) ──────────────────
 
-@workflow(name="processing_workflow")
-async def processing_workflow(task: ProcessingTask) -> dict:
+async def _run_processing(task: ProcessingTask) -> dict:
+    """Core processing logic. Called directly by the SB listener (concurrent-safe)."""
     if task.is_delete:
         await _delete_blobs(task.domain, task.doc_name)
-        # Forward delete signal to embedding queue for AI Search index cleanup
         await queue_embedding_task(task, "", 0)
         return {"status": "delete_forwarded", "doc_name": task.doc_name}
 
@@ -232,7 +231,6 @@ async def processing_workflow(task: ProcessingTask) -> dict:
         extra={"task_id": task.task_id, "doc_name": task.doc_name},
     )
 
-    # ── Authoritative dedup gate: check AI Search before parsing ─────────────
     if await _sha256_already_indexed(task.doc_name, task.file_sha256):
         return {
             "status":      "skipped_duplicate",
@@ -268,6 +266,12 @@ async def processing_workflow(task: ProcessingTask) -> dict:
     }
 
 
+@workflow(name="processing_workflow")
+async def processing_workflow(task: ProcessingTask) -> dict:
+    """MAF workflow wrapper — do not call .run() concurrently; use _run_processing directly."""
+    return await _run_processing(task)
+
+
 # ── Service Bus listener ──────────────────────────────────────────────────────
 
 _PROCESSING_CONCURRENCY = 4  # max docs parsed in parallel per container instance
@@ -278,11 +282,9 @@ async def _process_one(receiver, msg, semaphore: asyncio.Semaphore) -> None:
     async with semaphore:
         payload = None
         try:
-            payload    = json.loads(b"".join(msg.body))
-            task       = ProcessingTask(**payload)
-            result_obj = await processing_workflow.run(task)
-            outputs    = result_obj.get_outputs()
-            result     = outputs[0] if outputs else {}
+            payload = json.loads(b"".join(msg.body))
+            task    = ProcessingTask(**payload)
+            result  = await _run_processing(task)
             logger.info("Processed: %s", result)
             await receiver.complete_message(msg)
         except Exception as exc:
