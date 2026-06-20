@@ -1,6 +1,18 @@
 """
-Ingestion pipeline settings.
-No Document Intelligence — PDF parsing uses pdfplumber + pymupdf + LLM.
+Ingestion pipeline settings — loaded once from environment / .env file.
+
+All settings are declared as typed ``pydantic_settings.BaseSettings`` fields so
+that missing required values raise a clear error at startup rather than failing
+mid-request with an ``AttributeError``.
+
+Auth strategy (no secrets in env vars where possible)
+------------------------------------------------------
+- Azure resources in production use Managed Identity (``RUNNING_IN_AZURE=true``).
+- Locally, ``AzureCliCredential`` is used for Blob, Search, and Service Bus.
+- ``AZURE_SEARCH_API_KEY`` is only needed locally when the developer does not
+  have the Search RBAC role assigned.
+- ``AZURE_SERVICE_BUS_CONNECTION_STR`` is only needed locally; production uses
+  Managed Identity via ``AZURE_SERVICE_BUS_NAMESPACE``.
 """
 from __future__ import annotations
 
@@ -84,6 +96,11 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    """Return the cached ``Settings`` singleton.
+
+    The cache means ``.env`` is read exactly once per process, which avoids
+    repeated disk I/O and makes the settings object safe to pass around.
+    """
     return Settings()
 
 

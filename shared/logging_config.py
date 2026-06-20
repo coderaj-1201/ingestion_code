@@ -1,4 +1,22 @@
-"""Structured JSON logging + optional App Insights."""
+"""Structured JSON logging with optional Azure Application Insights export.
+
+Call :func:`configure_logging` once at process startup (before any other
+logging calls). After that, use :func:`get_logger` or the standard
+``logging.getLogger(__name__)`` in every module.
+
+Log format
+----------
+Each line is a JSON object with fixed fields (``time``, ``level``, ``service``,
+``logger``, ``msg``) plus optional structured fields (``task_id``, ``doc_name``,
+``domain``, ``chunk_count``, ``chunk_id``) populated via the ``extra=`` kwarg on
+log calls. This makes KQL queries on Application Insights straightforward, e.g.::
+
+    traces
+    | where customDimensions.doc_name == "Leave Policy 2024.pdf"
+
+Noisy third-party loggers (``azure.core``, ``httpx``, ``msal``, etc.) are
+suppressed to ``WARNING`` to keep stdout readable.
+"""
 from __future__ import annotations
 
 import json

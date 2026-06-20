@@ -26,6 +26,7 @@ from shared.config import settings
 
 
 def _credential():
+    """Return ``ManagedIdentityCredential`` in Azure, ``AzureCliCredential`` locally."""
     if os.getenv("RUNNING_IN_AZURE"):
         return ManagedIdentityCredential()
     return AzureCliCredential()
@@ -33,6 +34,7 @@ def _credential():
 
 @lru_cache(maxsize=1)
 def get_foundry_client() -> AIProjectClient:
+    """Return a cached Azure AI Foundry project client."""
     return AIProjectClient(
         endpoint=str(settings.AZURE_FOUNDRY_PROJECT_ENDPOINT),
         credential=_credential(),
@@ -41,6 +43,7 @@ def get_foundry_client() -> AIProjectClient:
 
 @lru_cache(maxsize=1)
 def get_openai_client() -> AzureOpenAI:
+    """Return a cached Azure OpenAI client sourced from the Foundry project."""
     return get_foundry_client().get_openai_client(
         api_version=settings.AZURE_OPENAI_API_VERSION
 
@@ -49,6 +52,7 @@ def get_openai_client() -> AzureOpenAI:
 
 @lru_cache(maxsize=1)
 def get_blob_service_client() -> BlobServiceClient:
+    """Return a cached synchronous BlobServiceClient."""
     return BlobServiceClient(
         account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
         credential=_credential(),
@@ -71,6 +75,7 @@ def _search_credential():
 
 @lru_cache(maxsize=1)
 def get_search_client() -> SearchClient:
+    """Return a cached AI Search client pointed at ``AZURE_SEARCH_INDEX``."""
     return SearchClient(
         endpoint=str(settings.AZURE_SEARCH_ENDPOINT),
         index_name=settings.AZURE_SEARCH_INDEX,
@@ -80,6 +85,7 @@ def get_search_client() -> SearchClient:
 
 @lru_cache(maxsize=1)
 def get_search_index_client() -> SearchIndexClient:
+    """Return a cached AI Search index management client (used by infra scripts)."""
     return SearchIndexClient(
         endpoint=str(settings.AZURE_SEARCH_ENDPOINT),
         credential=_search_credential(),

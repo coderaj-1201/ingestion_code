@@ -153,6 +153,15 @@ class GraphClient:
             return sub
 
     async def renew_subscription(self, subscription_id: str, expiration_hours: int = 4230) -> dict:
+        """Extend the expiry of an existing Graph subscription.
+
+        Args:
+            subscription_id:   ID of the subscription to renew.
+            expiration_hours:  Minutes to extend by (default: Graph max for SharePoint).
+
+        Returns:
+            Updated subscription object (id, expirationDateTime).
+        """
         import datetime
         expiry = (
             datetime.datetime.now(datetime.timezone.utc)
@@ -168,6 +177,11 @@ class GraphClient:
             return resp.json()
 
     async def delete_subscription(self, subscription_id: str) -> None:
+        """Delete a Graph subscription, stopping change notifications.
+
+        Args:
+            subscription_id: ID of the subscription to delete.
+        """
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.delete(
                 f"{_GRAPH_BASE}/subscriptions/{subscription_id}",

@@ -1,4 +1,15 @@
-"""Service Bus send helpers for the ingestion pipeline."""
+"""Service Bus send helpers for the ingestion pipeline.
+
+Provides a single :func:`send_to_queue` coroutine used by all three agents to
+push JSON messages onto Azure Service Bus queues. Each call opens a fresh
+``ServiceBusClient`` and sender so there is no shared connection state to
+manage across concurrent tasks.
+
+Auth strategy mirrors :mod:`shared.azure_clients`:
+  - ``RUNNING_IN_AZURE`` → ``ManagedIdentityCredential``
+  - ``AZURE_SERVICE_BUS_CONNECTION_STR`` set → connection string (local dev)
+  - Neither → ``AzureCliCredential`` with ``AZURE_SERVICE_BUS_NAMESPACE``
+"""
 from __future__ import annotations
 
 import json
