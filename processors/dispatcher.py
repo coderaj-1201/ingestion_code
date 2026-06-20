@@ -24,6 +24,12 @@ _MIME_TO_FILETYPE = {
     "image/webp":                                                               FileType.IMAGE,
     "image/bmp":                                                                FileType.IMAGE,
     "image/tiff":                                                               FileType.IMAGE,
+    "video/mp4":                                                                FileType.VIDEO,
+    "video/quicktime":                                                          FileType.VIDEO,
+    "video/x-msvideo":                                                          FileType.VIDEO,
+    "video/x-matroska":                                                         FileType.VIDEO,
+    "video/x-ms-wmv":                                                           FileType.VIDEO,
+    "video/x-flv":                                                              FileType.VIDEO,
 }
 
 _EXT_TO_FILETYPE = {
@@ -42,6 +48,13 @@ _EXT_TO_FILETYPE = {
     ".bmp":  FileType.IMAGE,
     ".tiff": FileType.IMAGE,
     ".tif":  FileType.IMAGE,
+    ".mp4":  FileType.VIDEO,
+    ".mov":  FileType.VIDEO,
+    ".avi":  FileType.VIDEO,
+    ".mkv":  FileType.VIDEO,
+    ".wmv":  FileType.VIDEO,
+    ".flv":  FileType.VIDEO,
+    ".mxf":  FileType.VIDEO,
 }
 
 # Single source of truth for supported extensions — imported by ingestion_agent.
@@ -98,6 +111,10 @@ def parse_document(
         case FileType.IMAGE:
             from processors.image_parser import parse_image
             chunks = parse_image(file_bytes, doc_name, doc_url, domain, blob_path)
+
+        case FileType.VIDEO:
+            from processors.video_parser import parse_video
+            chunks = parse_video(file_bytes, doc_name, doc_url, domain, blob_path)
 
         case _:
             raise ValueError(f"No parser implemented for file type: {file_type}")

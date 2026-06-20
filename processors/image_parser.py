@@ -1,112 +1,118 @@
 """
-Image Parser
-============
+Image Parser — Azure AI Vision
+==============================
 
-Uses Azure OpenAI GPT-4o Vision to extract content from image files.
+Uses the Azure AI Vision Image Analysis 4.0 SDK to extract content from image
+files. Unlike the GPT-4o Vision path this service is purpose-built for OCR and
+image captioning, runs synchronously, and is significantly cheaper per image.
 
 Strategy
 --------
-1. Base64-encode the image and send it to the chat completions API with a
-   structured prompt that requests OCR, diagram descriptions, and table content.
-2. Split the response into paragraphs and produce a two-level chunk hierarchy:
-   - One parent chunk  (``parent_id=""``) holding the full extracted text
-   - Child chunks      (``parent_id=<parent_chunk_id>``) per paragraph
+1. Submit raw image bytes to ``ImageAnalysisClient.analyze`` requesting the
+   ``READ`` (OCR) and ``CAPTION`` visual features.
+2. ``READ`` returns the full text content of the image (documents, screenshots,
+   printed text, handwriting).  ``CAPTION`` returns a one-sentence description
+   of the scene — used as fallback content when no text is found.
+3. Produce a two-level chunk hierarchy (same pattern as all other parsers):
+   - **Parent chunk** (``parent_id=""``) — full OCR text or caption; no vector.
+   - **Child chunks** (``parent_id=<parent_id>``) — one per text line group;
+     embedded for similarity search.
 
-Supported formats
------------------
-PNG, JPEG, GIF, WEBP, BMP, TIFF — anything the Vision API accepts.
-Files larger than 20 MB are rejected by the API; this parser raises
-``ValueError`` for oversized inputs so the caller can skip gracefully.
+Configuration
+-------------
+Set in ``.env`` or environment:
 
-Cost note
----------
-GPT-4o processes images in 512-px tiles. ``detail="auto"`` lets the model
-choose resolution. For most document scans ``detail="low"`` (~85 tokens,
-$0.0002) is sufficient; leave ``detail="auto"`` for diagrams/charts.
+    AZURE_VISION_ENDPOINT=https://<resource>.cognitiveservices.azure.com/
+    AZURE_VISION_KEY=<api-key>
+
+Cost: ~$0.0015 per image (Read + Caption, as of 2025 pricing).
+
+Supported formats: PNG, JPEG, GIF, WEBP, BMP, TIFF.
+File size limit: 20 MB (enforced by the API).
 """
 from __future__ import annotations
 
-import base64
 import logging
-import mimetypes
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from shared.azure_clients import get_openai_client
 from shared.config import settings
 from shared.models import ChunkType, RawChunk
 
 logger = logging.getLogger(__name__)
 
-# GPT-4o Vision API enforces a 20 MB per-image limit.
+# Azure AI Vision hard limit.
 _MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
-_EXTRACT_PROMPT = """\
-You are a document digitisation assistant. Analyse this image and extract ALL content.
-
-Return the content as plain text, structured as follows:
-- If there is a visible document title, output it on the first line prefixed with "TITLE: "
-- Reproduce any printed or handwritten text verbatim, preserving paragraph breaks
-- For tables: output a Markdown table followed by a plain-English summary
-- For charts/diagrams/graphs: write a clear description of what the visual shows,
-  including axis labels, data ranges, trends, and any annotations
-- For forms: output each field label and its filled value on a separate line
-- Omit decorative elements (borders, logos, background patterns) unless they carry meaning
-
-Do not add commentary, introductions, or apologies. Output only the extracted content.\
-"""
-
-# Minimum text length (chars) to produce child chunks; shorter content → parent only.
-_MIN_CHILD_CONTENT = 200
-# Minimum paragraph length to become its own child chunk.
-_MIN_PARAGRAPH_CHARS = 40
+# Group text lines into paragraphs when there is a blank-line gap in the OCR
+# output.  Lines shorter than this are joined to the next line.
+_MIN_CHILD_CHARS = 40
 
 
-def _detect_mime(doc_name: str, file_bytes: bytes) -> str:
-    """Infer MIME type from filename extension, with fallback to image/png."""
-    ext = "." + doc_name.lower().rsplit(".", 1)[-1] if "." in doc_name else ""
-    mime_map = {
-        ".png":  "image/png",
-        ".jpg":  "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif":  "image/gif",
-        ".webp": "image/webp",
-        ".bmp":  "image/bmp",
-        ".tiff": "image/tiff",
-        ".tif":  "image/tiff",
-    }
-    return mime_map.get(ext, "image/png")
+def _get_vision_client():
+    """Construct an ImageAnalysisClient from settings.
 
+    Raises RuntimeError if the required config vars are absent so that the
+    error surfaces at call time with a clear message rather than an
+    AttributeError deep in the Azure SDK.
+    """
+    from azure.ai.vision.imageanalysis import ImageAnalysisClient
+    from azure.core.credentials import AzureKeyCredential
 
-def _call_vision(image_b64: str, mime: str) -> str:
-    """Send the image to GPT-4o Vision and return the raw text response."""
-    client = get_openai_client()
-    resp = client.chat.completions.create(
-        model=settings.AZURE_OPENAI_VISION_DEPLOYMENT,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{mime};base64,{image_b64}",
-                            "detail": "auto",
-                        },
-                    },
-                    {"type": "text", "text": _EXTRACT_PROMPT},
-                ],
-            }
-        ],
-        max_tokens=4096,
-        temperature=0,
+    endpoint = str(settings.AZURE_VISION_ENDPOINT or "")
+    if not endpoint:
+        raise RuntimeError(
+            "AZURE_VISION_ENDPOINT is not configured. "
+            "Set it in .env to enable image parsing."
+        )
+    raw_key = settings.AZURE_VISION_KEY
+    if not raw_key:
+        raise RuntimeError(
+            "AZURE_VISION_KEY is not configured. "
+            "Set it in .env to enable image parsing."
+        )
+    return ImageAnalysisClient(
+        endpoint=endpoint.rstrip("/"),
+        credential=AzureKeyCredential(raw_key.get_secret_value()),
     )
-    return resp.choices[0].message.content or ""
 
 
-def _split_paragraphs(text: str) -> list[str]:
-    """Split extracted text into non-empty paragraphs."""
-    return [p.strip() for p in text.split("\n\n") if p.strip()]
+def _split_into_groups(text: str) -> list[str]:
+    """Split OCR text into logical paragraph groups.
+
+    Lines separated by a blank line form a group.  Short lines (< _MIN_CHILD_CHARS)
+    are merged with the following non-blank line to avoid producing trivial
+    one-word child chunks.
+    """
+    groups: list[str] = []
+    current: list[str] = []
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if current:
+                groups.append(" ".join(current))
+                current = []
+        else:
+            current.append(line)
+
+    if current:
+        groups.append(" ".join(current))
+
+    # Merge groups that are too short into their successor.
+    merged: list[str] = []
+    carry = ""
+    for g in groups:
+        combined = (carry + " " + g).strip() if carry else g
+        if len(combined) < _MIN_CHILD_CHARS and groups.index(g) < len(groups) - 1:
+            carry = combined
+        else:
+            merged.append(combined)
+            carry = ""
+    if carry:
+        merged.append(carry)
+
+    return [m for m in merged if m]
 
 
 def parse_image(
@@ -116,56 +122,61 @@ def parse_image(
     domain: str,
     blob_path: str,
 ) -> list[RawChunk]:
-    """Parse an image file via GPT-4o Vision and return a list of RawChunks.
+    """Parse an image file via Azure AI Vision and return a list of RawChunks.
 
     Args:
-        file_bytes: Raw bytes of the image file.
-        doc_name:   File name (e.g. ``"org_chart.png"``).
+        file_bytes: Raw image bytes (PNG, JPEG, GIF, WEBP, BMP, TIFF).
+        doc_name:   File name, e.g. ``"org_chart.png"``.
         doc_url:    SharePoint URL to the file.
         domain:     Business domain (``"hr"``, ``"ops"``, etc.).
         blob_path:  Path in the raw-documents blob container.
 
     Returns:
-        List of :class:`~shared.models.RawChunk` objects (1 parent + N children).
+        list[RawChunk] — 1 parent + N child chunks.
 
     Raises:
-        ValueError: If the file exceeds the 20 MB API limit.
+        ValueError:   If the file exceeds 20 MB.
+        RuntimeError: If Azure Vision config vars are missing.
     """
+    from azure.ai.vision.imageanalysis.models import VisualFeatures
+
     if len(file_bytes) > _MAX_IMAGE_BYTES:
         raise ValueError(
-            f"Image {doc_name} is {len(file_bytes) / 1024 / 1024:.1f} MB — "
-            f"exceeds the 20 MB GPT-4o Vision limit."
+            f"{doc_name} is {len(file_bytes) / 1024 / 1024:.1f} MB — "
+            "exceeds the 20 MB Azure AI Vision limit."
         )
 
     ingested_at = datetime.now(timezone.utc).isoformat()
-    mime = _detect_mime(doc_name, file_bytes)
-    image_b64 = base64.b64encode(file_bytes).decode("ascii")
+    client = _get_vision_client()
 
     logger.info(
-        "Calling GPT-4o Vision for image doc_name=%s size=%dKB mime=%s",
-        doc_name, len(file_bytes) // 1024, mime,
+        "Azure AI Vision: analysing doc_name=%s size=%dKB",
+        doc_name, len(file_bytes) // 1024,
     )
-    raw_text = _call_vision(image_b64, mime)
 
-    if not raw_text.strip():
-        logger.warning("GPT-4o Vision returned empty content for doc_name=%s", doc_name)
-        raw_text = "[No extractable content]"
+    result = client.analyze(
+        image_data=file_bytes,
+        visual_features=[VisualFeatures.READ, VisualFeatures.CAPTION],
+    )
 
-    # Extract title line if present.
-    title = doc_name
-    lines = raw_text.split("\n")
-    if lines and lines[0].startswith("TITLE:"):
-        title = lines[0].removeprefix("TITLE:").strip()
-        raw_text = "\n".join(lines[1:]).strip()
+    # Prefer OCR text; fall back to caption for purely visual images.
+    ocr_text = result.read.content.strip() if result.read and result.read.content else ""
+    caption   = result.caption.text.strip() if result.caption and result.caption.text else ""
+
+    if ocr_text:
+        primary_content = ocr_text
+        title = doc_name
+    elif caption:
+        primary_content = caption
+        title = doc_name
+    else:
+        primary_content = "[No text or visual content detected]"
+        title = doc_name
 
     chunks: list[RawChunk] = []
     parent_id = str(uuid4())
 
-    # Parent chunk — full extracted text, no vector (used for retrieval context).
-    parent = RawChunk(
-        chunk_id=parent_id,
-        parent_id="",
-        chunk_type=ChunkType.PARAGRAPH,
+    base = dict(
         domain=domain,
         doc_name=doc_name,
         source=doc_name,
@@ -174,49 +185,41 @@ def parse_image(
         blob_path=blob_path,
         ingested_at=ingested_at,
         title=title,
-        content=raw_text,
     )
-    chunks.append(parent)
 
-    # Child chunks — per paragraph, embedded for similarity search.
-    if len(raw_text) >= _MIN_CHILD_CONTENT:
-        paragraphs = _split_paragraphs(raw_text)
-        for idx, para in enumerate(paragraphs):
-            if len(para) < _MIN_PARAGRAPH_CHARS:
-                continue
-            child = RawChunk(
-                chunk_id=str(uuid4()),
-                parent_id=parent_id,
-                chunk_type=ChunkType.PARAGRAPH,
-                domain=domain,
-                doc_name=doc_name,
-                source=doc_name,
-                doc_url=doc_url,
-                file_type="image",
-                blob_path=blob_path,
-                ingested_at=ingested_at,
-                title=title,
-                content=para,
-                page_number=idx + 1,  # paragraph index as page proxy
-            )
-            chunks.append(child)
+    # Parent — full text, no vector; used to supply retrieval context.
+    chunks.append(RawChunk(
+        chunk_id=parent_id,
+        parent_id="",
+        chunk_type=ChunkType.PARAGRAPH,
+        content=primary_content,
+        **base,
+    ))
 
-        # If no paragraph was long enough, produce one child from full text.
-        if len(chunks) == 1:
-            chunks.append(RawChunk(
-                chunk_id=str(uuid4()),
-                parent_id=parent_id,
-                chunk_type=ChunkType.PARAGRAPH,
-                domain=domain,
-                doc_name=doc_name,
-                source=doc_name,
-                doc_url=doc_url,
-                file_type="image",
-                blob_path=blob_path,
-                ingested_at=ingested_at,
-                title=title,
-                content=raw_text,
-            ))
+    # Children — one per paragraph group, embedded for similarity search.
+    groups = _split_into_groups(ocr_text) if ocr_text else ([caption] if caption else [])
+    for idx, group in enumerate(groups):
+        if len(group) < _MIN_CHILD_CHARS:
+            continue
+        chunks.append(RawChunk(
+            chunk_id=str(uuid4()),
+            parent_id=parent_id,
+            chunk_type=ChunkType.PARAGRAPH,
+            content=group,
+            page_number=idx + 1,
+            **base,
+        ))
 
-    logger.info("Image parsed: %s → %d chunks", doc_name, len(chunks))
+    # If no group passed the length gate, emit one child from the full content
+    # so every parent always has at least one embedded child.
+    if len(chunks) == 1 and primary_content:
+        chunks.append(RawChunk(
+            chunk_id=str(uuid4()),
+            parent_id=parent_id,
+            chunk_type=ChunkType.PARAGRAPH,
+            content=primary_content,
+            **base,
+        ))
+
+    logger.info("Image parsed: %s → %d chunks (ocr_len=%d)", doc_name, len(chunks), len(ocr_text))
     return chunks

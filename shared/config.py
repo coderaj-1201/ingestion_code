@@ -36,8 +36,20 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_VERSION: str           = "2024-08-01-preview"
     # Light LLM for page cleaning + table serialisation — gpt-4o-mini or phi-3-mini
     AZURE_OPENAI_LIGHT_LLM_DEPLOYMENT: str  = "gpt-4.1-mini"
-    # Vision-capable deployment for image parsing (must support GPT-4o vision)
-    AZURE_OPENAI_VISION_DEPLOYMENT: str     = "gpt-4o"
+
+    # ── Azure AI Vision (image parsing) ───────────────────────────────────────
+    # Required to enable image parsing (PNG, JPEG, GIF, WEBP, BMP, TIFF).
+    # Create an Azure AI Vision resource and copy the endpoint + key here.
+    # Cost: ~$0.0015 per image.
+    AZURE_VISION_ENDPOINT: AnyHttpUrl | None = None
+    AZURE_VISION_KEY: SecretStr | None       = None
+
+    # ── Azure AI Content Understanding (video parsing) ────────────────────────
+    # Required to enable video parsing (MP4, MOV, AVI, MKV, etc.).
+    # Create an Azure AI Services resource with Content Understanding enabled.
+    # Cost: ~$0.035 per video minute; free tier: 10 hours/month.
+    CONTENT_UNDERSTANDING_ENDPOINT: AnyHttpUrl | None = None
+    CONTENT_UNDERSTANDING_KEY: SecretStr | None       = None
 
     # ── Azure Blob Storage ────────────────────────────────────────────────────
     AZURE_STORAGE_ACCOUNT_NAME: str

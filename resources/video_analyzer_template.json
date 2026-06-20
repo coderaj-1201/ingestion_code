@@ -1,0 +1,16 @@
+{
+  "description": "Video analyzer for RAG ingestion — extracts shot-level transcripts and scene descriptions.",
+  "scenario": "videoShot",
+  "fieldSchema": {
+    "fields": {
+      "transcript": {
+        "type": "string",
+        "description": "Verbatim speech-to-text transcript of all spoken content in this video shot."
+      },
+      "description": {
+        "type": "string",
+        "description": "Detailed visual description of what is happening on screen during this shot, including any on-screen text, diagrams, slide content, or notable visual elements."
+      }
+    }
+  }
+}

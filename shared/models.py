@@ -26,6 +26,7 @@ class FileType(StrEnum):
     XLSX  = "xlsx"
     PPTX  = "pptx"
     IMAGE = "image"
+    VIDEO = "video"
 
 
 class ChunkType(StrEnum):
