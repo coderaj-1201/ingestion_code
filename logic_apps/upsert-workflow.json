@@ -45,20 +45,94 @@
 
   "actions": {
 
-    "Get_items": {
-      "type": "ApiConnection",
+    "Initialize_changed_items": {
+      "type": "InitializeVariable",
       "runAfter": {},
       "inputs": {
-        "host": {
-          "connection": {
-            "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+        "variables": [{"name": "changedItems", "type": "array", "value": []}]
+      }
+    },
+
+    "Initialize_changed_skip": {
+      "type": "InitializeVariable",
+      "runAfter": {"Initialize_changed_items": ["Succeeded"]},
+      "inputs": {
+        "variables": [{"name": "changedSkip", "type": "integer", "value": 0}]
+      }
+    },
+
+    "Initialize_changed_has_more": {
+      "type": "InitializeVariable",
+      "runAfter": {"Initialize_changed_skip": ["Succeeded"]},
+      "inputs": {
+        "variables": [{"name": "changedHasMore", "type": "boolean", "value": true}]
+      }
+    },
+
+    "Compose_cutoff_time": {
+      "type": "Compose",
+      "runAfter": {"Initialize_changed_has_more": ["Succeeded"]},
+      "inputs": "@addMinutes(utcNow(), -6)"
+    },
+
+    "Paginate_changed_documents": {
+      "type": "Until",
+      "runAfter": {"Compose_cutoff_time": ["Succeeded"]},
+      "expression": "@equals(variables('changedHasMore'), false)",
+      "limit": {"count": 20, "timeout": "PT10M"},
+      "actions": {
+        "Get_changed_page": {
+          "type": "ApiConnection",
+          "runAfter": {},
+          "inputs": {
+            "host": {
+              "connection": {
+                "name": "@parameters('$connections')['sharepointonline']['connectionId']"
+              }
+            },
+            "method": "get",
+            "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
+            "queries": {
+              "$filter": "Modified ge datetime'@{outputs('Compose_cutoff_time')}'",
+              "$orderby": "ID asc",
+              "$top": 500,
+              "$skip": "@variables('changedSkip')"
+            }
           }
         },
-        "method": "get",
-        "path": "/datasets/@{encodeURIComponent(encodeURIComponent(parameters('sharepointSiteUrl')))}/tables/@{encodeURIComponent(encodeURIComponent(parameters('sharepointLibrary')))}/items",
-        "queries": {
-          "$filter": "Modified ge datetime'@{addMinutes(utcNow(), -7)}'",
-          "$top": 500
+        "Compose_merged_changed_items": {
+          "type": "Compose",
+          "runAfter": {"Get_changed_page": ["Succeeded"]},
+          "inputs": "@union(variables('changedItems'), body('Get_changed_page')?['value'])"
+        },
+        "Append_page_to_changed_items": {
+          "type": "SetVariable",
+          "runAfter": {"Compose_merged_changed_items": ["Succeeded"]},
+          "inputs": {
+            "name": "changedItems",
+            "value": "@outputs('Compose_merged_changed_items')"
+          }
+        },
+        "Compose_new_changed_skip": {
+          "type": "Compose",
+          "runAfter": {"Append_page_to_changed_items": ["Succeeded"]},
+          "inputs": "@add(variables('changedSkip'), 500)"
+        },
+        "Increment_changed_skip": {
+          "type": "SetVariable",
+          "runAfter": {"Compose_new_changed_skip": ["Succeeded"]},
+          "inputs": {
+            "name": "changedSkip",
+            "value": "@outputs('Compose_new_changed_skip')"
+          }
+        },
+        "Set_changed_has_more": {
+          "type": "SetVariable",
+          "runAfter": {"Increment_changed_skip": ["Succeeded"]},
+          "inputs": {
+            "name": "changedHasMore",
+            "value": "@greater(length(body('Get_changed_page')?['value']), 499)"
+          }
         }
       }
     },
@@ -66,10 +140,10 @@
     "Filter_to_files_only": {
       "type": "Query",
       "runAfter": {
-        "Get_items": ["Succeeded"]
+        "Paginate_changed_documents": ["Succeeded"]
       },
       "inputs": {
-        "from": "@body('Get_items')?['value']",
+        "from": "@variables('changedItems')",
         "where": "@not(equals(item()?['{IsFolder}'], true))"
       }
     },
@@ -78,6 +152,11 @@
       "type": "Foreach",
       "runAfter": {
         "Filter_to_files_only": ["Succeeded"]
+      },
+      "runtimeConfiguration": {
+        "concurrency": {
+          "repetitions": 10
+        }
       },
       "foreach": "@body('Filter_to_files_only')",
       "actions": {
@@ -135,7 +214,9 @@
 
     "Initialize_doc_items": {
       "type": "InitializeVariable",
-      "runAfter": {},
+      "runAfter": {
+        "For_each_changed_file": ["Succeeded", "Skipped", "Failed"]
+      },
       "inputs": {
         "variables": [{"name": "docItems", "type": "array", "value": []}]
       }
@@ -219,24 +300,13 @@
       }
     },
 
-    "Filter_all_to_files_only": {
+    "Filter_to_documents_only": {
       "type": "Query",
       "runAfter": {
         "Paginate_all_documents": ["Succeeded"]
       },
       "inputs": {
         "from": "@variables('docItems')",
-        "where": "@not(equals(item()?['{IsFolder}'], true))"
-      }
-    },
-
-    "Filter_to_documents_only": {
-      "type": "Query",
-      "runAfter": {
-        "Filter_all_to_files_only": ["Succeeded"]
-      },
-      "inputs": {
-        "from": "@body('Filter_all_to_files_only')",
         "where": "@or(endswith(item()?['{FilenameWithExtension}'], '.pdf'), endswith(item()?['{FilenameWithExtension}'], '.docx'), endswith(item()?['{FilenameWithExtension}'], '.xlsx'), endswith(item()?['{FilenameWithExtension}'], '.pptx'))"
       }
     },
@@ -292,7 +362,14 @@
       "expression": {
         "or": [
           {
-            "equals": ["@length(body('Parse_snapshot'))", 0]
+            "and": [
+              {
+                "equals": ["@length(body('Parse_snapshot'))", 0]
+              },
+              {
+                "greater": ["@length(body('Build_current_names'))", 0]
+              }
+            ]
           },
           {
             "greaterOrEquals": [
