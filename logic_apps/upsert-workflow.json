@@ -308,7 +308,7 @@
       },
       "inputs": {
         "from": "@variables('docItems')",
-        "where": "@or(endswith(item()?['{FilenameWithExtension}'], '.pdf'), endswith(item()?['{FilenameWithExtension}'], '.docx'), endswith(item()?['{FilenameWithExtension}'], '.xlsx'), endswith(item()?['{FilenameWithExtension}'], '.pptx'))"
+        "where": "@or(endswith(item()?['{FilenameWithExtension}'], '.pdf'), endswith(item()?['{FilenameWithExtension}'], '.docx'), endswith(item()?['{FilenameWithExtension}'], '.xlsx'), endswith(item()?['{FilenameWithExtension}'], '.pptx'), endswith(item()?['{FilenameWithExtension}'], '.png'), endswith(item()?['{FilenameWithExtension}'], '.jpg'), endswith(item()?['{FilenameWithExtension}'], '.jpeg'), endswith(item()?['{FilenameWithExtension}'], '.gif'), endswith(item()?['{FilenameWithExtension}'], '.webp'), endswith(item()?['{FilenameWithExtension}'], '.bmp'), endswith(item()?['{FilenameWithExtension}'], '.tiff'), endswith(item()?['{FilenameWithExtension}'], '.tif'))"
       }
     },
 

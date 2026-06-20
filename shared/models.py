@@ -21,10 +21,11 @@ class Domain(StrEnum):
 
 
 class FileType(StrEnum):
-    PDF  = "pdf"
-    DOCX = "docx"
-    XLSX = "xlsx"
-    PPTX = "pptx"
+    PDF   = "pdf"
+    DOCX  = "docx"
+    XLSX  = "xlsx"
+    PPTX  = "pptx"
+    IMAGE = "image"
 
 
 class ChunkType(StrEnum):

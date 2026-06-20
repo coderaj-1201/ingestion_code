@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_VERSION: str           = "2024-08-01-preview"
     # Light LLM for page cleaning + table serialisation — gpt-4o-mini or phi-3-mini
     AZURE_OPENAI_LIGHT_LLM_DEPLOYMENT: str  = "gpt-4.1-mini"
+    # Vision-capable deployment for image parsing (must support GPT-4o vision)
+    AZURE_OPENAI_VISION_DEPLOYMENT: str     = "gpt-4o"
 
     # ── Azure Blob Storage ────────────────────────────────────────────────────
     AZURE_STORAGE_ACCOUNT_NAME: str
