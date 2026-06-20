@@ -193,6 +193,7 @@
             },
             "body": {
               "doc_name": "@{item()?['{FilenameWithExtension}']}",
+              "doc_path": "@{item()?['{FullPath}']}",
               "doc_url": "@{item()?['{Link}']}",
               "domain": "@parameters('domain')",
               "file_type": "@{last(split(item()?['{FilenameWithExtension}'], '.'))}",
@@ -318,7 +319,7 @@
       },
       "inputs": {
         "from": "@body('Filter_to_documents_only')",
-        "select": "@item()?['{FilenameWithExtension}']"
+        "select": "@item()?['{FullPath}']"
       }
     },
 
@@ -408,7 +409,8 @@
                   "X-Logic-App-Secret": "@parameters('logicAppSecret')"
                 },
                 "body": {
-                  "doc_name": "@{item()}",
+                  "doc_name": "@{last(split(item(), '/'))}",
+                  "doc_path": "@{item()}",
                   "doc_url": "",
                   "domain": "@parameters('domain')",
                   "file_type": "@{last(split(item(), '.'))}",

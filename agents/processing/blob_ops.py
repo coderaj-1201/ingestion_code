@@ -66,20 +66,21 @@ async def upload_blob(container: str, blob_path: str, data: bytes) -> None:
         logger.debug("Uploaded processed blob: %s", blob_path)
 
 
-async def delete_blobs(domain: str, doc_name: str) -> None:
+async def delete_blobs(domain: str, doc_path: str) -> None:
     """Delete the raw and processed blobs for a document.
 
-    Both the raw file (``raw-documents/<domain>/<doc_name>``) and the processed
-    chunk JSON (``processed-chunks/<domain>/<doc_name>.json``) are deleted in a
+    Both the raw file (``raw-documents/<domain>/<doc_path>``) and the processed
+    chunk JSON (``processed-chunks/<domain>/<doc_path>.json``) are deleted in a
     single Blob client session. 404 errors are silently ignored — the blobs may
     already have been deleted by a previous run.
 
     Args:
         domain:   Business domain subfolder, e.g. ``hr``.
-        doc_name: File name as stored in SharePoint.
+        doc_path: Full relative path within the SharePoint library,
+                  e.g. ``FolderA/Leave Policy 2024.pdf``.
     """
-    raw_path = f"{domain}/{doc_name}"
-    processed_path = f"{domain}/{doc_name}.json"
+    raw_path = f"{domain}/{doc_path}"
+    processed_path = f"{domain}/{doc_path}.json"
 
     async with await get_blob_client() as svc:
         for container, path in [

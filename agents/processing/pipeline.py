@@ -56,9 +56,10 @@ async def download_raw_file(task: ProcessingTask) -> bytes:
         task.doc_name,
         extra={"task_id": task.task_id, "doc_name": task.doc_name},
     )
+    blob_path = f"{task.domain}/{task.doc_path}" if task.doc_path else f"{task.domain}/{task.doc_name}"
     return await download_blob(
         settings.AZURE_STORAGE_CONTAINER_RAW,
-        f"{task.domain}/{task.doc_name}",
+        blob_path,
     )
 
 
@@ -88,6 +89,7 @@ async def run_parser(file_bytes: bytes, task: ProcessingTask) -> list[RawChunk]:
         extra={"task_id": task.task_id, "doc_name": task.doc_name},
     )
     try:
+        doc_path = task.doc_path or task.doc_name
         chunks = await asyncio.wait_for(
             asyncio.to_thread(
                 parse_document,
@@ -95,7 +97,8 @@ async def run_parser(file_bytes: bytes, task: ProcessingTask) -> list[RawChunk]:
                 task.doc_name,
                 task.doc_url,
                 task.domain,
-                f"{task.domain}/{task.doc_name}",
+                f"{task.domain}/{doc_path}",
+                doc_path=doc_path,
             ),
             timeout=_PARSER_TIMEOUT_SECONDS,
         )
@@ -123,7 +126,8 @@ async def upload_processed_chunks(chunks: list[RawChunk], task: ProcessingTask) 
     Returns:
         Blob path of the uploaded JSON (e.g. ``hr/Leave Policy 2024.pdf.json``).
     """
-    blob_path = f"{task.domain}/{task.doc_name}.json"
+    doc_path = task.doc_path or task.doc_name
+    blob_path = f"{task.domain}/{doc_path}.json"
     data = json.dumps([asdict(c) for c in chunks], ensure_ascii=False).encode("utf-8")
     await upload_blob(settings.AZURE_STORAGE_CONTAINER_PROCESSED, blob_path, data)
     logger.info(
@@ -151,6 +155,7 @@ async def queue_embedding_task(
         "task_id":             task.task_id,
         "domain":              task.domain,
         "doc_name":            task.doc_name,
+        "doc_path":            task.doc_path,
         "doc_url":             task.doc_url,
         "file_type":           task.file_type,
         "processed_blob_path": processed_blob_path,
@@ -184,7 +189,7 @@ async def run_processing(task: ProcessingTask) -> dict:
         and ``blob_path`` keys (subset present depends on the path taken).
     """
     if task.is_delete:
-        await delete_blobs(task.domain, task.doc_name)
+        await delete_blobs(task.domain, task.doc_path or task.doc_name)
         await queue_embedding_task(task, "", 0)
         return {"status": "delete_forwarded", "doc_name": task.doc_name}
 

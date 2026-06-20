@@ -49,10 +49,14 @@ def parse_document(
     domain: str,
     blob_path: str,
     mime_type: str = "",
+    doc_path: str = "",
 ) -> list[RawChunk]:
     """
     Route to the correct parser and return chunks.
     Raises ValueError for unsupported file types.
+
+    doc_path is the full relative path within the SharePoint library
+    (e.g. "FolderA/Leave Policy.pdf") and is stamped on every returned chunk.
     """
     file_type = detect_file_type(doc_name, mime_type)
     if not file_type:
@@ -63,19 +67,25 @@ def parse_document(
     match file_type:
         case FileType.PDF:
             from processors.pdf_parser import parse_pdf
-            return parse_pdf(file_bytes, doc_name, doc_url, domain, blob_path)
+            chunks = parse_pdf(file_bytes, doc_name, doc_url, domain, blob_path)
 
         case FileType.DOCX:
             from processors.docx_parser import parse_docx
-            return parse_docx(file_bytes, doc_name, doc_url, domain, blob_path)
+            chunks = parse_docx(file_bytes, doc_name, doc_url, domain, blob_path)
 
         case FileType.XLSX:
             from processors.xlsx_parser import parse_xlsx
-            return parse_xlsx(file_bytes, doc_name, doc_url, domain, blob_path)
+            chunks = parse_xlsx(file_bytes, doc_name, doc_url, domain, blob_path)
 
         case FileType.PPTX:
             from processors.pptx_parser import parse_pptx
-            return parse_pptx(file_bytes, doc_name, doc_url, domain, blob_path)
+            chunks = parse_pptx(file_bytes, doc_name, doc_url, domain, blob_path)
 
         case _:
             raise ValueError(f"No parser implemented for file type: {file_type}")
+
+    if doc_path:
+        for chunk in chunks:
+            chunk.doc_path = doc_path
+
+    return chunks

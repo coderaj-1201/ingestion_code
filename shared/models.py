@@ -67,7 +67,8 @@ class ProcessingTask:
     doc_name: str          = ""
     doc_url: str           = ""
     file_type: str         = ""
-    processed_blob_path: str = ""      # processed/<domain>/<doc_name>.json
+    doc_path: str          = ""        # full relative path within SharePoint library
+    processed_blob_path: str = ""      # processed/<domain>/<doc_path>.json
     chunk_count: int       = 0
     is_delete: bool        = False
     file_sha256: str       = ""        # propagated from IngestionTask
@@ -90,6 +91,7 @@ class RawChunk:
     # ── Document provenance ───────────────────────────────────────────────────
     domain: str                = ""
     doc_name: str              = ""        # "Leave Policy 2024.pdf"
+    doc_path: str              = ""        # "FolderA/Leave Policy 2024.pdf" — unique within library
     source: str                = ""        # alias for doc_name — used by retrieval
     doc_url: str               = ""        # SharePoint URL
     file_type: str             = ""
@@ -118,6 +120,7 @@ class RawChunk:
             "chunk_type":          self.chunk_type,
             "domain":              self.domain,
             "doc_name":            self.doc_name,
+            "doc_path":            self.doc_path,
             "source":              self.doc_name,   # retrieval uses 'source'
             "doc_url":             self.doc_url,
             "file_type":           self.file_type,
@@ -182,5 +185,6 @@ class LogicAppIngestRequest(BaseModel):
     doc_url: str
     domain: str
     file_type: str
+    doc_path: str = ""              # full relative path within the SharePoint library, e.g. "FolderA/Leave Policy.pdf"
     file_content_base64: str = ""   # empty on delete
     is_delete: bool = False

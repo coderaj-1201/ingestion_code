@@ -130,16 +130,17 @@ async def run_embedding(task: dict) -> dict:
         Result dict describing the outcome (``status``, chunk counts, etc.).
     """
     doc_name = task["doc_name"]
+    doc_path = task.get("doc_path") or doc_name
     is_delete = task.get("is_delete", False)
 
     logger.info(
-        "embedding doc_name=%s is_delete=%s",
-        doc_name, is_delete,
+        "embedding doc_name=%s doc_path=%s is_delete=%s",
+        doc_name, doc_path, is_delete,
         extra={"task_id": task.get("task_id"), "doc_name": doc_name},
     )
 
     if is_delete:
-        deleted = await delete_from_search(doc_name)
+        deleted = await delete_from_search(doc_path)
         return {"status": "deleted", "doc_name": doc_name, "deleted_chunks": deleted}
 
     chunks = await download_processed_chunks(task["processed_blob_path"])

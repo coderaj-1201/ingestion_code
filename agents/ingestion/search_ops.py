@@ -16,14 +16,19 @@ from shared.config import settings
 logger = logging.getLogger(__name__)
 
 
-async def delete_chunks_from_search(doc_name: str) -> int:
-    """Delete all AI Search index chunks for ``doc_name``.
+async def delete_chunks_from_search(doc_path: str) -> int:
+    """Delete all AI Search index chunks for the document identified by ``doc_path``.
 
     Paginates in batches of 1 000 until no results remain (a single
     ``top=1000`` call would silently leave orphans for large documents).
 
+    Filters on ``doc_path`` (unique per file within a domain library) rather
+    than ``doc_name`` to avoid deleting chunks belonging to same-named files in
+    different SharePoint folders.
+
     Args:
-        doc_name: Document name as stored in the ``doc_name`` index field.
+        doc_path: Full relative path within the SharePoint library as stored in
+                  the ``doc_path`` index field, e.g. ``FolderA/Leave Policy.pdf``.
 
     Returns:
         Number of chunks deleted (0 means the document was not found).
@@ -41,9 +46,8 @@ async def delete_chunks_from_search(doc_name: str) -> int:
     else:
         search_credential = AzureCliCredential()
 
-    # Single-quote escape to prevent OData injection from doc_name values
-    # that contain apostrophes (e.g. "O'Brien Policy.pdf").
-    escaped = doc_name.replace("'", "''")
+    # Single-quote escape to prevent OData injection from values containing apostrophes.
+    escaped = doc_path.replace("'", "''")
     deleted = 0
 
     async with SearchClient(
@@ -54,7 +58,7 @@ async def delete_chunks_from_search(doc_name: str) -> int:
         while True:
             results = await client.search(
                 search_text="*",
-                filter=f"doc_name eq '{escaped}'",
+                filter=f"doc_path eq '{escaped}'",
                 select=["id"],
                 top=1000,
             )

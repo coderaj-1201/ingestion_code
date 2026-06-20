@@ -62,6 +62,7 @@ def build_index_definition(index_name: str, semantic_config: str) -> dict:
             # ── Document provenance ───────────────────────────────────────────
             {"name": "domain",             "type": "Edm.String",  "filterable": True,  "facetable": True,  "retrievable": True},
             {"name": "doc_name",           "type": "Edm.String",  "filterable": True,  "retrievable": True},
+            {"name": "doc_path",           "type": "Edm.String",  "filterable": True,  "retrievable": True},
             {"name": "source",             "type": "Edm.String",  "filterable": True,  "retrievable": True},
             {"name": "doc_url",            "type": "Edm.String",  "filterable": False, "retrievable": True},
             {"name": "file_type",          "type": "Edm.String",  "filterable": True,  "facetable": True,  "retrievable": True},

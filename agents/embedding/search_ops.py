@@ -107,16 +107,18 @@ async def upload_to_search(
     return total
 
 
-async def delete_from_search(doc_name: str) -> int:
-    """Remove all chunks for ``doc_name`` from the AI Search index.
+async def delete_from_search(doc_path: str) -> int:
+    """Remove all chunks for the document identified by ``doc_path`` from AI Search.
 
-    Paginates in batches of 1 000 until no results remain. A single
-    ``top=1000`` call would silently leave orphans for large documents
-    (> 1 000 chunks). Capped at ``_DELETE_MAX_ITERATIONS`` as a safety guard
-    against infinite loops if Search returns stale results after a delete.
+    Filters on ``doc_path`` (unique per file within a domain library) to avoid
+    deleting chunks belonging to same-named files in different SharePoint folders.
+
+    Paginates in batches of 1 000 until no results remain. Capped at
+    ``_DELETE_MAX_ITERATIONS`` as a safety guard against infinite loops.
 
     Args:
-        doc_name: Value of the ``doc_name`` index field to filter on.
+        doc_path: Full relative path within the SharePoint library as stored in
+                  the ``doc_path`` index field, e.g. ``FolderA/Leave Policy.pdf``.
 
     Returns:
         Total number of chunks deleted.
@@ -128,7 +130,7 @@ async def delete_from_search(doc_name: str) -> int:
         results = await asyncio.to_thread(
             search.search,
             search_text="*",
-            filter=f"doc_name eq {odata_str(doc_name)}",
+            filter=f"doc_path eq {odata_str(doc_path)}",
             select=["id"],
             top=1000,
         )
@@ -142,10 +144,10 @@ async def delete_from_search(doc_name: str) -> int:
             deleted += sum(1 for r in result if r.succeeded)
     else:
         logger.warning(
-            "delete_from_search hit iteration cap (%d) for doc_name=%s — "
+            "delete_from_search hit iteration cap (%d) for doc_path=%s — "
             "%d chunks deleted, index may still have orphans",
-            _DELETE_MAX_ITERATIONS, doc_name, deleted,
+            _DELETE_MAX_ITERATIONS, doc_path, deleted,
         )
 
-    logger.info("Deleted %d chunks for doc_name=%s", deleted, doc_name)
+    logger.info("Deleted %d chunks for doc_path=%s", deleted, doc_path)
     return deleted

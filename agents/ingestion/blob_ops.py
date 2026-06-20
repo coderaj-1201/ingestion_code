@@ -96,19 +96,18 @@ async def blob_sha256(blob_path: str) -> str | None:
         return None
 
 
-async def delete_raw_blob(domain: str, doc_name: str) -> None:
-    """Delete the raw blob for ``doc_name`` under ``domain``.
+async def delete_raw_blob(blob_path: str) -> None:
+    """Delete the raw blob at ``blob_path`` from the raw-documents container.
 
     Silently ignores 404 errors — the blob may already have been deleted
     by a previous run or manually.
 
     Args:
-        domain:   Business domain subfolder, e.g. ``hr``.
-        doc_name: File name as stored in SharePoint, e.g. ``Leave Policy 2024.pdf``.
+        blob_path: Full path within the raw-documents container,
+                   e.g. ``hr/FolderA/Leave Policy 2024.pdf``.
     """
     from azure.core.exceptions import ResourceNotFoundError
 
-    blob_path = f"{domain}/{doc_name}"
     try:
         async with AsyncBlobClient(
             account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",

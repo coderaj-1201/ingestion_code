@@ -123,28 +123,30 @@ async def ingest_from_logic_app(
 
     import uuid
     task_id = str(uuid.uuid4())
-    blob_path = f"{req.domain}/{req.doc_name}"
+    # Use doc_path for blob storage so same-named files in different folders don't collide.
+    doc_path = req.doc_path or req.doc_name
+    blob_path = f"{req.domain}/{doc_path}"
 
     logger.info(
-        "Logic App ingest doc_name=%s domain=%s is_delete=%s",
-        req.doc_name, req.domain, req.is_delete,
+        "Logic App ingest doc_name=%s doc_path=%s domain=%s is_delete=%s",
+        req.doc_name, doc_path, req.domain, req.is_delete,
         extra={"task_id": task_id, "doc_name": req.doc_name, "domain": req.domain},
     )
 
     # -- Delete path ----------------------------------------------------------
     if req.is_delete:
-        chunks_deleted = await delete_chunks_from_search(req.doc_name)
+        chunks_deleted = await delete_chunks_from_search(doc_path)
         if chunks_deleted == 0:
             logger.info(
-                "Delete ignored — doc not in index doc_name=%s",
-                req.doc_name,
+                "Delete ignored — doc not in index doc_path=%s",
+                doc_path,
                 extra={"task_id": task_id, "doc_name": req.doc_name},
             )
             return {"status": "ignored", "reason": "not_in_index", "doc_name": req.doc_name}
-        await delete_raw_blob(req.domain, req.doc_name)
+        await delete_raw_blob(blob_path)
         logger.info(
-            "Deleted doc_name=%s chunks=%d",
-            req.doc_name, chunks_deleted,
+            "Deleted doc_path=%s chunks=%d",
+            doc_path, chunks_deleted,
             extra={"task_id": task_id, "doc_name": req.doc_name},
         )
         return {"status": "deleted", "doc_name": req.doc_name, "chunks_deleted": chunks_deleted}
@@ -179,6 +181,7 @@ async def ingest_from_logic_app(
         task_id=task_id,
         domain=req.domain,
         doc_name=req.doc_name,
+        doc_path=doc_path,
         doc_url=req.doc_url,
         file_type=req.file_type,
         file_sha256=new_sha,
