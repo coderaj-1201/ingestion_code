@@ -144,7 +144,7 @@
       },
       "inputs": {
         "from": "@variables('changedItems')",
-        "where": "@not(equals(item()?['{IsFolder}'], true))"
+        "where": "@and(not(equals(item()?['{IsFolder}'], true)), not(or(endswith(item()?['{FilenameWithExtension}'], '.mp4'), endswith(item()?['{FilenameWithExtension}'], '.mov'), endswith(item()?['{FilenameWithExtension}'], '.avi'), endswith(item()?['{FilenameWithExtension}'], '.mkv'), endswith(item()?['{FilenameWithExtension}'], '.wmv'), endswith(item()?['{FilenameWithExtension}'], '.flv'), endswith(item()?['{FilenameWithExtension}'], '.mxf'))))"
       }
     },
 

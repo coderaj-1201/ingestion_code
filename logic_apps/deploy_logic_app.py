@@ -1,5 +1,5 @@
 """
-One-off deploy helper: pushes logic_apps/upsert_workflow.json live via the
+One-off deploy helper: pushes logic_apps/upsert-workflow.json live via the
 ARM REST API directly, bypassing `az logic workflow update`'s shorthand-syntax
 parser (which chokes on this nested JSON on Windows).
 
