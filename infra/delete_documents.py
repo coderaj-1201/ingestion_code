@@ -52,17 +52,16 @@ def _require(name: str) -> str:
 
 # ── Blob deletion ─────────────────────────────────────────────────────────────
 def delete_blobs(doc_names: list[str]) -> None:
-    from azure.identity import AzureCliCredential
+    from azure.identity import DefaultAzureCredential
     from azure.storage.blob import BlobServiceClient
 
     account_name  = _require("AZURE_STORAGE_ACCOUNT_NAME")
     container_raw = os.getenv("AZURE_STORAGE_CONTAINER_RAW", "raw-documents")
     container_proc = os.getenv("AZURE_STORAGE_CONTAINER_PROCESSED", "processed-chunks")
 
-    credential = AzureCliCredential()
     client = BlobServiceClient(
         account_url=f"https://{account_name}.blob.core.windows.net",
-        credential=credential,
+        credential=DefaultAzureCredential(),
     )
 
     for doc_name in doc_names:
@@ -99,16 +98,13 @@ def _delete_prefix(client, container: str, prefix: str) -> None:
 
 # ── AI Search deletion ────────────────────────────────────────────────────────
 def delete_from_search(doc_names: list[str]) -> None:
-    from azure.core.credentials import AzureKeyCredential
-    from azure.identity import AzureCliCredential
+    from azure.identity import DefaultAzureCredential
     from azure.search.documents import SearchClient
 
     endpoint = _require("AZURE_SEARCH_ENDPOINT")
     index    = os.getenv("AZURE_SEARCH_INDEX", "idx-rag")
-    api_key  = os.getenv("AZURE_SEARCH_API_KEY", "").strip()
 
-    credential = AzureKeyCredential(api_key) if api_key else AzureCliCredential()
-    search = SearchClient(endpoint=endpoint, index_name=index, credential=credential)
+    search = SearchClient(endpoint=endpoint, index_name=index, credential=DefaultAzureCredential())
 
     for doc_name in doc_names:
         _delete_doc_chunks(search, doc_name)

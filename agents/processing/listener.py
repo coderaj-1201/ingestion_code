@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -76,26 +75,17 @@ async def _sb_listener() -> None:
         "Processing Agent SB listener starting on queue '%s'",
         settings.SB_QUEUE_PROCESSING,
     )
-    from azure.identity.aio import AzureCliCredential, ManagedIdentityCredential
+    from azure.identity.aio import DefaultAzureCredential
     from azure.servicebus.aio import ServiceBusClient as AsyncSBClient
 
     semaphore = asyncio.Semaphore(_PROCESSING_CONCURRENCY)
 
     while True:
         try:
-            credential = (
-                ManagedIdentityCredential() if os.getenv("RUNNING_IN_AZURE")
-                else AzureCliCredential()
+            sb = AsyncSBClient(
+                fully_qualified_namespace=settings.AZURE_SERVICE_BUS_NAMESPACE,
+                credential=DefaultAzureCredential(),
             )
-            if settings.AZURE_SERVICE_BUS_CONNECTION_STR:
-                sb = AsyncSBClient.from_connection_string(
-                    settings.AZURE_SERVICE_BUS_CONNECTION_STR.get_secret_value()
-                )
-            else:
-                sb = AsyncSBClient(
-                    fully_qualified_namespace=settings.AZURE_SERVICE_BUS_NAMESPACE,
-                    credential=credential,
-                )
 
             tasks: set[asyncio.Task] = set()
             async with sb:

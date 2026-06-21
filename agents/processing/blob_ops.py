@@ -12,8 +12,8 @@ All functions open a fresh async BlobServiceClient per call via
 from __future__ import annotations
 
 import logging
-import os
 
+from azure.identity.aio import DefaultAzureCredential
 from azure.storage.blob.aio import BlobServiceClient as AsyncBlobClient
 
 from shared.config import settings
@@ -22,20 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 async def get_blob_client() -> AsyncBlobClient:
-    """Create a new async BlobServiceClient using the appropriate credential.
-
-    Uses ``ManagedIdentityCredential`` inside Azure and ``AzureCliCredential``
-    for local development. Always use the returned client as an async context manager.
-    """
-    from azure.identity.aio import AzureCliCredential, ManagedIdentityCredential
-
-    credential = (
-        ManagedIdentityCredential() if os.getenv("RUNNING_IN_AZURE")
-        else AzureCliCredential()
-    )
+    """Create a new async BlobServiceClient. Always use as an async context manager."""
     return AsyncBlobClient(
         account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
-        credential=credential,
+        credential=DefaultAzureCredential(),
     )
 
 
@@ -125,13 +115,12 @@ async def sha256_already_indexed(doc_name: str, sha256: str) -> bool:
         return False
 
     try:
-        from azure.core.credentials import AzureKeyCredential
         from azure.search.documents.aio import SearchClient as AsyncSearchClient
 
         async with AsyncSearchClient(
             endpoint=str(settings.AZURE_SEARCH_ENDPOINT),
             index_name=settings.AZURE_SEARCH_INDEX,
-            credential=AzureKeyCredential(settings.AZURE_SEARCH_API_KEY.get_secret_value()),
+            credential=DefaultAzureCredential(),
         ) as client:
             results = [
                 r async for r in await client.search(

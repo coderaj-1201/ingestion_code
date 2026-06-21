@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-from azure.core.credentials import AzureKeyCredential
+from azure.identity import DefaultAzureCredential
 from azure.search.documents import SearchClient
 
 doc_name = "Parle-G - Wikipedia.pdf"
@@ -10,7 +10,7 @@ doc_name = "Parle-G - Wikipedia.pdf"
 client = SearchClient(
     endpoint=os.environ["AZURE_SEARCH_ENDPOINT"],
     index_name=os.environ.get("AZURE_SEARCH_INDEX", "idx-rag"),
-    credential=AzureKeyCredential(os.environ["AZURE_SEARCH_API_KEY"]),
+    credential=DefaultAzureCredential(),
 )
 
 escaped = doc_name.replace("'", "''")

@@ -20,10 +20,10 @@ Strategy
 
 Configuration
 -------------
-Set in ``.env`` or environment:
-
-    AZURE_VISION_ENDPOINT=https://<resource>.cognitiveservices.azure.com/
-    AZURE_VISION_KEY=<api-key>
+Set ``AZURE_VISION_ENDPOINT`` in ``.env`` or environment.
+Auth uses ``DefaultAzureCredential`` — no API key required.
+The container app's Managed Identity needs the ``Cognitive Services User`` role
+on the Azure AI Vision resource.
 
 Cost: ~$0.0015 per image (Read + Caption, as of 2025 pricing).
 
@@ -50,14 +50,12 @@ _MIN_CHILD_CHARS = 40
 
 
 def _get_vision_client():
-    """Construct an ImageAnalysisClient from settings.
+    """Construct an ImageAnalysisClient using DefaultAzureCredential.
 
-    Raises RuntimeError if the required config vars are absent so that the
-    error surfaces at call time with a clear message rather than an
-    AttributeError deep in the Azure SDK.
+    Raises RuntimeError if AZURE_VISION_ENDPOINT is not configured.
     """
     from azure.ai.vision.imageanalysis import ImageAnalysisClient
-    from azure.core.credentials import AzureKeyCredential
+    from azure.identity import DefaultAzureCredential
 
     endpoint = str(settings.AZURE_VISION_ENDPOINT or "")
     if not endpoint:
@@ -65,15 +63,9 @@ def _get_vision_client():
             "AZURE_VISION_ENDPOINT is not configured. "
             "Set it in .env to enable image parsing."
         )
-    raw_key = settings.AZURE_VISION_KEY
-    if not raw_key:
-        raise RuntimeError(
-            "AZURE_VISION_KEY is not configured. "
-            "Set it in .env to enable image parsing."
-        )
     return ImageAnalysisClient(
         endpoint=endpoint.rstrip("/"),
-        credential=AzureKeyCredential(raw_key.get_secret_value()),
+        credential=DefaultAzureCredential(),
     )
 
 

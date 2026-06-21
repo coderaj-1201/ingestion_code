@@ -29,10 +29,10 @@ Pipeline
 
 Configuration
 -------------
-Set in ``.env`` or environment:
-
-    CONTENT_UNDERSTANDING_ENDPOINT=https://<resource>.cognitiveservices.azure.com/
-    CONTENT_UNDERSTANDING_KEY=<api-key>
+Set ``CONTENT_UNDERSTANDING_ENDPOINT`` in ``.env`` or environment.
+Auth uses ``DefaultAzureCredential`` — no API key required.
+The container app's Managed Identity needs the ``Cognitive Services User`` role
+on the Azure AI Services resource.
 
 Supported formats: MP4, MOV, AVI, MKV, FLV, WMV, MXF.
 Free tier: 10 hours/month — enough for dev/test.
@@ -71,12 +71,12 @@ _SHOT_HEADER_RE = re.compile(r"^#{1,3}\s+Shot\b", re.MULTILINE | re.IGNORECASE)
 
 
 def _get_client():
-    """Construct an AzureContentUnderstandingClient from settings.
+    """Construct an AzureContentUnderstandingClient using DefaultAzureCredential.
 
-    Raises RuntimeError if required config vars are absent.
+    Raises RuntimeError if CONTENT_UNDERSTANDING_ENDPOINT is not configured.
     """
     from azure.ai.contentunderstanding import AzureContentUnderstandingClient
-    from azure.core.credentials import AzureKeyCredential
+    from azure.identity import DefaultAzureCredential
 
     endpoint = str(settings.CONTENT_UNDERSTANDING_ENDPOINT or "")
     if not endpoint:
@@ -84,15 +84,9 @@ def _get_client():
             "CONTENT_UNDERSTANDING_ENDPOINT is not configured. "
             "Set it in .env to enable video parsing."
         )
-    raw_key = settings.CONTENT_UNDERSTANDING_KEY
-    if not raw_key:
-        raise RuntimeError(
-            "CONTENT_UNDERSTANDING_KEY is not configured. "
-            "Set it in .env to enable video parsing."
-        )
     return AzureContentUnderstandingClient(
         endpoint=endpoint.rstrip("/"),
-        credential=AzureKeyCredential(raw_key.get_secret_value()),
+        credential=DefaultAzureCredential(),
     )
 
 

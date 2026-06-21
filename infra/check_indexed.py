@@ -37,17 +37,16 @@ def _odata_str(value: str) -> str:
 
 
 def check_docs(doc_names: list[str]) -> None:
-    from azure.core.credentials import AzureKeyCredential
+    from azure.identity import DefaultAzureCredential
     from azure.search.documents import SearchClient
 
-    endpoint  = os.environ["AZURE_SEARCH_ENDPOINT"]
-    api_key   = os.environ["AZURE_SEARCH_API_KEY"]
-    index     = os.environ["AZURE_SEARCH_INDEX"]
+    endpoint = os.environ["AZURE_SEARCH_ENDPOINT"]
+    index    = os.environ["AZURE_SEARCH_INDEX"]
 
     client = SearchClient(
         endpoint=endpoint,
         index_name=index,
-        credential=AzureKeyCredential(api_key),
+        credential=DefaultAzureCredential(),
     )
 
     print(f"\nIndex: {index}\n{'─' * 60}")

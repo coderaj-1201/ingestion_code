@@ -9,8 +9,8 @@ bothering to delete blobs.
 from __future__ import annotations
 
 import logging
-import os
 
+from azure.identity.aio import DefaultAzureCredential
 from shared.config import settings
 
 logger = logging.getLogger(__name__)
@@ -33,18 +33,9 @@ async def delete_chunks_from_search(doc_path: str) -> int:
     Returns:
         Number of chunks deleted (0 means the document was not found).
     """
-    from azure.core.credentials import AzureKeyCredential
-    from azure.identity.aio import AzureCliCredential, ManagedIdentityCredential
     from azure.search.documents.aio import SearchClient
 
-    # Prefer Managed Identity in Azure; fall back to API key or CLI credential locally.
-    raw_key = settings.AZURE_SEARCH_API_KEY
-    if raw_key:
-        search_credential = AzureKeyCredential(raw_key.get_secret_value())
-    elif os.getenv("RUNNING_IN_AZURE"):
-        search_credential = ManagedIdentityCredential()
-    else:
-        search_credential = AzureCliCredential()
+    search_credential = DefaultAzureCredential()
 
     # Single-quote escape to prevent OData injection from values containing apostrophes.
     escaped = doc_path.replace("'", "''")

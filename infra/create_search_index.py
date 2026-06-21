@@ -12,9 +12,9 @@ Requirements:
     pip install azure-search-documents azure-identity python-dotenv
 
 Auth:
-    Local:  uses AzureCliCredential (az login must be run first)
-            OR set AZURE_SEARCH_API_KEY in .env for API-key auth
-    Azure:  set RUNNING_IN_AZURE=true — uses Managed Identity
+    Uses DefaultAzureCredential — run `az login` first for local dev.
+    In Azure, the caller's Managed Identity must have
+    "Search Index Data Contributor" on the Search resource.
 """
 from __future__ import annotations
 
@@ -29,17 +29,11 @@ try:
 except ImportError:
     pass  # python-dotenv not installed — env vars must be set externally
 
+from azure.identity import DefaultAzureCredential
+
 
 def _credential():
-    if os.getenv("RUNNING_IN_AZURE"):
-        from azure.identity import ManagedIdentityCredential
-        return ManagedIdentityCredential()
-    api_key = os.getenv("AZURE_SEARCH_API_KEY")
-    if api_key:
-        from azure.core.credentials import AzureKeyCredential
-        return AzureKeyCredential(api_key)
-    from azure.identity import AzureCliCredential
-    return AzureCliCredential()
+    return DefaultAzureCredential()
 
 
 def build_index_definition(index_name: str, semantic_config: str) -> dict:
@@ -144,15 +138,19 @@ def build_index_definition(index_name: str, semantic_config: str) -> dict:
     }
 
 
+def _auth_header(credential) -> dict:
+    """Return a Bearer token Authorization header from the credential."""
+    token = credential.get_token("https://search.azure.com/.default")
+    return {"Authorization": f"Bearer {token.token}"}
+
+
 def create_or_skip(endpoint: str, index_name: str, semantic_config: str, credential) -> None:
     from azure.search.documents.indexes import SearchIndexClient
-    from azure.search.documents.indexes.models import SearchIndex
-    from azure.core.exceptions import ResourceExistsError
 
     client = SearchIndexClient(endpoint=endpoint, credential=credential)
 
     try:
-        existing = client.get_index(index_name)
+        client.get_index(index_name)
         print(f"Index '{index_name}' already exists — skipping creation.")
         print("  Run with --recreate to drop and rebuild (WARNING: deletes all data).")
         return
@@ -161,14 +159,8 @@ def create_or_skip(endpoint: str, index_name: str, semantic_config: str, credent
 
     definition = build_index_definition(index_name, semantic_config)
 
-    # azure-search-documents SDK: create from dict via REST directly
     import json
     import urllib.request
-
-    # Use REST API for maximum compatibility across SDK versions
-    api_key_header = {}
-    if hasattr(credential, "key"):
-        api_key_header = {"api-key": credential.key}
 
     url  = f"{endpoint.rstrip('/')}/indexes?api-version=2024-05-01-preview"
     body = json.dumps(definition).encode()
@@ -176,7 +168,7 @@ def create_or_skip(endpoint: str, index_name: str, semantic_config: str, credent
     req = urllib.request.Request(
         url,
         data=body,
-        headers={**api_key_header, "Content-Type": "application/json"},
+        headers={**_auth_header(credential), "Content-Type": "application/json"},
         method="POST",
     )
 
@@ -191,17 +183,14 @@ def create_or_skip(endpoint: str, index_name: str, semantic_config: str, credent
 
 
 def recreate(endpoint: str, index_name: str, semantic_config: str, credential) -> None:
-    from azure.search.documents.indexes import SearchIndexClient
+    import json
+    import urllib.request
 
-    client     = SearchIndexClient(endpoint=endpoint, credential=credential)
-    api_key    = credential.key if hasattr(credential, "key") else None
-    api_header = {"api-key": api_key} if api_key else {}
-
-    import urllib.request, json
+    auth = _auth_header(credential)
 
     # Delete
     url = f"{endpoint.rstrip('/')}/indexes/{index_name}?api-version=2024-05-01-preview"
-    req = urllib.request.Request(url, headers=api_header, method="DELETE")
+    req = urllib.request.Request(url, headers=auth, method="DELETE")
     try:
         with urllib.request.urlopen(req):
             print(f"Deleted existing index '{index_name}'.")

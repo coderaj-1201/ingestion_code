@@ -100,8 +100,7 @@ deploy_agent() {
             --image "$IMAGE" \
             --set-env-vars \
                 AGENT="$agent" \
-                PORT="$port" \
-                RUNNING_IN_AZURE="true"
+                PORT="$port"
     else
         # Create new
         az containerapp create \
@@ -119,7 +118,6 @@ deploy_agent() {
             --env-vars \
                 AGENT="$agent" \
                 PORT="$port" \
-                RUNNING_IN_AZURE="true" \
             ${ENV_SECRETS:+--secrets $ENV_SECRETS}
     fi
 }

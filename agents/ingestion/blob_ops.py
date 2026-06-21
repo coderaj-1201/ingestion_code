@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 
+from azure.identity.aio import DefaultAzureCredential
 from azure.storage.blob.aio import BlobServiceClient as AsyncBlobClient
 
 from shared.config import settings
@@ -22,17 +22,8 @@ from shared.config import settings
 logger = logging.getLogger(__name__)
 
 
-def blob_credential():
-    """Return the appropriate Azure credential for Blob Storage.
-
-    Uses ManagedIdentityCredential inside Azure Container Apps and
-    AzureCliCredential for local development.
-    """
-    from azure.identity.aio import AzureCliCredential, ManagedIdentityCredential
-
-    if os.getenv("RUNNING_IN_AZURE"):
-        return ManagedIdentityCredential()
-    return AzureCliCredential()
+def blob_credential() -> DefaultAzureCredential:
+    return DefaultAzureCredential()
 
 
 def sha256_hex(data: bytes) -> str:

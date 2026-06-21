@@ -5,14 +5,12 @@ All settings are declared as typed ``pydantic_settings.BaseSettings`` fields so
 that missing required values raise a clear error at startup rather than failing
 mid-request with an ``AttributeError``.
 
-Auth strategy (no secrets in env vars where possible)
-------------------------------------------------------
-- Azure resources in production use Managed Identity (``RUNNING_IN_AZURE=true``).
-- Locally, ``AzureCliCredential`` is used for Blob, Search, and Service Bus.
-- ``AZURE_SEARCH_API_KEY`` is only needed locally when the developer does not
-  have the Search RBAC role assigned.
-- ``AZURE_SERVICE_BUS_CONNECTION_STR`` is only needed locally; production uses
-  Managed Identity via ``AZURE_SERVICE_BUS_NAMESPACE``.
+Auth strategy
+-------------
+All Azure SDK calls use ``DefaultAzureCredential``, which automatically selects
+``ManagedIdentityCredential`` inside Azure Container Apps and ``AzureCliCredential``
+on a developer workstation. No API keys or connection strings are required — access
+is controlled entirely via Azure RBAC role assignments.
 """
 from __future__ import annotations
 
@@ -39,17 +37,17 @@ class Settings(BaseSettings):
 
     # ── Azure AI Vision (image parsing) ───────────────────────────────────────
     # Required to enable image parsing (PNG, JPEG, GIF, WEBP, BMP, TIFF).
-    # Create an Azure AI Vision resource and copy the endpoint + key here.
+    # Create an Azure AI Vision resource and assign "Cognitive Services User"
+    # to the container app's Managed Identity.
     # Cost: ~$0.0015 per image.
     AZURE_VISION_ENDPOINT: AnyHttpUrl | None = None
-    AZURE_VISION_KEY: SecretStr | None       = None
 
     # ── Azure AI Content Understanding (video parsing) ────────────────────────
     # Required to enable video parsing (MP4, MOV, AVI, MKV, etc.).
     # Create an Azure AI Services resource with Content Understanding enabled.
+    # Assign "Cognitive Services User" to the container app's Managed Identity.
     # Cost: ~$0.035 per video minute; free tier: 10 hours/month.
     CONTENT_UNDERSTANDING_ENDPOINT: AnyHttpUrl | None = None
-    CONTENT_UNDERSTANDING_KEY: SecretStr | None       = None
 
     # ── Azure Blob Storage ────────────────────────────────────────────────────
     AZURE_STORAGE_ACCOUNT_NAME: str
@@ -58,19 +56,15 @@ class Settings(BaseSettings):
 
     # ── Azure AI Search ───────────────────────────────────────────────────────
     AZURE_SEARCH_ENDPOINT: AnyHttpUrl
-    # Required locally (API key auth). Leave blank in ACA — Managed Identity
-    # is used instead when RUNNING_IN_AZURE=true, so the key is never read.
-    AZURE_SEARCH_API_KEY: SecretStr | None = None
-    AZURE_SEARCH_INDEX: str                 = "idx-rag"
-    AZURE_SEARCH_SEMANTIC_CONFIG: str       = "rag-semantic-config"
+    AZURE_SEARCH_INDEX: str               = "idx-rag"
+    AZURE_SEARCH_SEMANTIC_CONFIG: str     = "rag-semantic-config"
 
     # ── Azure Service Bus ─────────────────────────────────────────────────────
-    AZURE_SERVICE_BUS_CONNECTION_STR: SecretStr | None = None  # local dev
-    AZURE_SERVICE_BUS_NAMESPACE: str        = ""               # prod (keyless)
+    AZURE_SERVICE_BUS_NAMESPACE: str      = ""
     # Only two queues are used — ingestion-queue was removed (Logic Apps calls
     # the Ingestion Agent directly over HTTP, no queue in that hop).
-    SB_QUEUE_PROCESSING: str                = "processing-queue"
-    SB_QUEUE_EMBEDDING: str                 = "embedding-queue"
+    SB_QUEUE_PROCESSING: str              = "processing-queue"
+    SB_QUEUE_EMBEDDING: str               = "embedding-queue"
     
     # ── Logic Apps integration ────────────────────────────────────────────────
     # Shared secret placed in the X-Logic-App-Secret header by every Logic App

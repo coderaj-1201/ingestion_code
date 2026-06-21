@@ -24,9 +24,8 @@ Usage:
         --execute
 
 Auth:
-    Run `az login` first. The script uses Azure CLI credentials for both
-    SharePoint REST API and blob storage. For AI Search, set
-    AZURE_SEARCH_API_KEY in .env, or the CLI credential is used as fallback.
+    Run `az login` first. Uses DefaultAzureCredential for blob and AI Search
+    (AzureCliCredential locally). SharePoint REST uses `az account get-access-token`.
 """
 from __future__ import annotations
 
@@ -93,9 +92,10 @@ def fetch_sharepoint_filenames(site_url: str, library: str) -> set[str]:
     }
 
     # GetByTitle expects the raw library name; requests will percent-encode the URL.
+    encoded_library = quote(library, safe="")
     url: str | None = (
         f"{site_url.rstrip('/')}/_api/web/lists"
-        f"/GetByTitle('{quote(library, safe=\"\")}')/items"
+        f"/GetByTitle('{encoded_library}')/items"
         f"?$select=FileLeafRef,FileSystemObjectType"
         f"&$filter=FileSystemObjectType eq 0"
         f"&$top=1000"
@@ -134,14 +134,12 @@ def fetch_indexed_doc_names(domain: str) -> set[str]:
     Return every unique doc_name in the AI Search index for the given domain.
     The SDK iterator handles pagination automatically.
     """
-    from azure.core.credentials import AzureKeyCredential
-    from azure.identity import AzureCliCredential
+    from azure.identity import DefaultAzureCredential
     from azure.search.documents import SearchClient
 
     endpoint   = _require("AZURE_SEARCH_ENDPOINT").rstrip("/")
     index      = os.getenv("AZURE_SEARCH_INDEX", "idx-rag")
-    raw_key    = os.getenv("AZURE_SEARCH_API_KEY", "").strip()
-    credential = AzureKeyCredential(raw_key) if raw_key else AzureCliCredential()
+    credential = DefaultAzureCredential()
 
     client    = SearchClient(endpoint=endpoint, index_name=index, credential=credential)
     escaped   = domain.replace("'", "''")
@@ -272,20 +270,17 @@ def main() -> None:
         return
 
     # ── 5. Delete ─────────────────────────────────────────────────────────────
-    from azure.core.credentials import AzureKeyCredential
-    from azure.identity import AzureCliCredential
+    from azure.identity import DefaultAzureCredential
     from azure.search.documents import SearchClient
     from azure.storage.blob import BlobServiceClient
 
-    endpoint   = _require("AZURE_SEARCH_ENDPOINT").rstrip("/")
-    index      = os.getenv("AZURE_SEARCH_INDEX", "idx-rag")
-    raw_key    = os.getenv("AZURE_SEARCH_API_KEY", "").strip()
-    credential = AzureKeyCredential(raw_key) if raw_key else AzureCliCredential()
+    endpoint = _require("AZURE_SEARCH_ENDPOINT").rstrip("/")
+    index    = os.getenv("AZURE_SEARCH_INDEX", "idx-rag")
 
-    search   = SearchClient(endpoint=endpoint, index_name=index, credential=credential)
+    search   = SearchClient(endpoint=endpoint, index_name=index, credential=DefaultAzureCredential())
     blob_svc = BlobServiceClient(
         account_url=f"https://{_require('AZURE_STORAGE_ACCOUNT_NAME')}.blob.core.windows.net",
-        credential=AzureCliCredential(),
+        credential=DefaultAzureCredential(),
     )
 
     total_chunks = 0
