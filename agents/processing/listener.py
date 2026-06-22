@@ -80,30 +80,31 @@ async def _sb_listener() -> None:
 
     semaphore = asyncio.Semaphore(_PROCESSING_CONCURRENCY)
 
-    while True:
-        try:
-            sb = AsyncSBClient(
-                fully_qualified_namespace=settings.AZURE_SERVICE_BUS_NAMESPACE,
-                credential=DefaultAzureCredential(),
-            )
+    async with DefaultAzureCredential() as credential:
+        while True:
+            try:
+                sb = AsyncSBClient(
+                    fully_qualified_namespace=settings.AZURE_SERVICE_BUS_NAMESPACE,
+                    credential=credential,
+                )
 
-            tasks: set[asyncio.Task] = set()
-            async with sb:
-                async with sb.get_queue_receiver(
-                    settings.SB_QUEUE_PROCESSING,
-                    max_wait_time=30,
-                    prefetch_count=_PROCESSING_CONCURRENCY,
-                ) as receiver:
-                    async for msg in receiver:
-                        t = asyncio.create_task(_process_one(receiver, msg, semaphore))
-                        tasks.add(t)
-                        t.add_done_callback(tasks.discard)
-                    # Drain in-flight tasks before the receiver closes.
-                    if tasks:
-                        await asyncio.gather(*tasks, return_exceptions=True)
-        except Exception as exc:
-            logger.error("SB listener crashed, restarting in 5s: %s", exc, exc_info=True)
-            await asyncio.sleep(5)
+                tasks: set[asyncio.Task] = set()
+                async with sb:
+                    async with sb.get_queue_receiver(
+                        settings.SB_QUEUE_PROCESSING,
+                        max_wait_time=30,
+                        prefetch_count=_PROCESSING_CONCURRENCY,
+                    ) as receiver:
+                        async for msg in receiver:
+                            t = asyncio.create_task(_process_one(receiver, msg, semaphore))
+                            tasks.add(t)
+                            t.add_done_callback(tasks.discard)
+                        # Drain in-flight tasks before the receiver closes.
+                        if tasks:
+                            await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as exc:
+                logger.error("SB listener crashed, restarting in 5s: %s", exc, exc_info=True)
+                await asyncio.sleep(5)
 
 
 # ---------------------------------------------------------------------------

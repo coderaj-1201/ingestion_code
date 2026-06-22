@@ -21,58 +21,30 @@ from shared.config import settings
 logger = logging.getLogger(__name__)
 
 
-async def get_blob_client() -> AsyncBlobClient:
-    """Create a new async BlobServiceClient. Always use as an async context manager."""
-    return AsyncBlobClient(
-        account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
-        credential=DefaultAzureCredential(),
-    )
+def _blob_url() -> str:
+    return f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
 
 
 async def download_blob(container: str, blob_path: str) -> bytes:
-    """Download a blob and return its contents as raw bytes.
-
-    Args:
-        container: Storage container name (e.g. ``raw-documents``).
-        blob_path: Path within the container, e.g. ``hr/Leave Policy 2024.pdf``.
-    """
-    async with await get_blob_client() as svc:
-        blob = svc.get_container_client(container).get_blob_client(blob_path)
-        stream = await blob.download_blob()
+    """Download a blob and return its contents as raw bytes."""
+    async with DefaultAzureCredential() as cred, AsyncBlobClient(_blob_url(), credential=cred) as svc:
+        stream = await svc.get_container_client(container).get_blob_client(blob_path).download_blob()
         return await stream.readall()
 
 
 async def upload_blob(container: str, blob_path: str, data: bytes) -> None:
-    """Upload ``data`` to ``blob_path`` in ``container``, overwriting any existing blob.
-
-    Args:
-        container: Storage container name (e.g. ``processed-chunks``).
-        blob_path: Path within the container.
-        data:      Raw bytes to write.
-    """
-    async with await get_blob_client() as svc:
-        blob = svc.get_container_client(container).get_blob_client(blob_path)
-        await blob.upload_blob(data, overwrite=True)
+    """Upload ``data`` to ``blob_path`` in ``container``, overwriting any existing blob."""
+    async with DefaultAzureCredential() as cred, AsyncBlobClient(_blob_url(), credential=cred) as svc:
+        await svc.get_container_client(container).get_blob_client(blob_path).upload_blob(data, overwrite=True)
         logger.debug("Uploaded processed blob: %s", blob_path)
 
 
 async def delete_blobs(domain: str, doc_path: str) -> None:
-    """Delete the raw and processed blobs for a document.
-
-    Both the raw file (``raw-documents/<domain>/<doc_path>``) and the processed
-    chunk JSON (``processed-chunks/<domain>/<doc_path>.json``) are deleted in a
-    single Blob client session. 404 errors are silently ignored — the blobs may
-    already have been deleted by a previous run.
-
-    Args:
-        domain:   Business domain subfolder, e.g. ``hr``.
-        doc_path: Full relative path within the SharePoint library,
-                  e.g. ``FolderA/Leave Policy 2024.pdf``.
-    """
+    """Delete the raw and processed blobs for a document, silently ignoring 404s."""
     raw_path = f"{domain}/{doc_path}"
     processed_path = f"{domain}/{doc_path}.json"
 
-    async with await get_blob_client() as svc:
+    async with DefaultAzureCredential() as cred, AsyncBlobClient(_blob_url(), credential=cred) as svc:
         for container, path in [
             (settings.AZURE_STORAGE_CONTAINER_RAW, raw_path),
             (settings.AZURE_STORAGE_CONTAINER_PROCESSED, processed_path),
@@ -117,10 +89,10 @@ async def sha256_already_indexed(doc_name: str, sha256: str) -> bool:
     try:
         from azure.search.documents.aio import SearchClient as AsyncSearchClient
 
-        async with AsyncSearchClient(
+        async with DefaultAzureCredential() as cred, AsyncSearchClient(
             endpoint=str(settings.AZURE_SEARCH_ENDPOINT),
             index_name=settings.AZURE_SEARCH_INDEX,
-            credential=DefaultAzureCredential(),
+            credential=cred,
         ) as client:
             results = [
                 r async for r in await client.search(

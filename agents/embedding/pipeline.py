@@ -56,9 +56,9 @@ async def download_processed_chunks(blob_path: str) -> list[RawChunk]:
     from azure.identity.aio import DefaultAzureCredential
     from azure.storage.blob.aio import BlobServiceClient as AsyncBlobClient
 
-    async with AsyncBlobClient(
+    async with DefaultAzureCredential() as credential, AsyncBlobClient(
         account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
-        credential=DefaultAzureCredential(),
+        credential=credential,
     ) as svc:
         blob = (
             svc.get_container_client(settings.AZURE_STORAGE_CONTAINER_PROCESSED)

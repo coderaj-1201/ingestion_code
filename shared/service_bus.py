@@ -25,9 +25,9 @@ async def send_to_queue(queue_name: str, payload: dict, correlation_id: str = ""
     from azure.identity.aio import DefaultAzureCredential
     from azure.servicebus.aio import ServiceBusClient as AsyncSBClient
 
-    async with AsyncSBClient(
+    async with DefaultAzureCredential() as credential, AsyncSBClient(
         fully_qualified_namespace=settings.AZURE_SERVICE_BUS_NAMESPACE,
-        credential=DefaultAzureCredential(),
+        credential=credential,
     ) as sb:
         async with sb.get_queue_sender(queue_name) as sender:
             msg = ServiceBusMessage(

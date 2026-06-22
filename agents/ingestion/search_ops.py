@@ -35,16 +35,14 @@ async def delete_chunks_from_search(doc_path: str) -> int:
     """
     from azure.search.documents.aio import SearchClient
 
-    search_credential = DefaultAzureCredential()
-
     # Single-quote escape to prevent OData injection from values containing apostrophes.
     escaped = doc_path.replace("'", "''")
     deleted = 0
 
-    async with SearchClient(
+    async with DefaultAzureCredential() as cred, SearchClient(
         endpoint=str(settings.AZURE_SEARCH_ENDPOINT),
         index_name=settings.AZURE_SEARCH_INDEX,
-        credential=search_credential,
+        credential=cred,
     ) as client:
         while True:
             results = await client.search(

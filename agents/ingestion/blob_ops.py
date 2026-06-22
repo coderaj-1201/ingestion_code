@@ -22,63 +22,30 @@ from shared.config import settings
 logger = logging.getLogger(__name__)
 
 
-def blob_credential() -> DefaultAzureCredential:
-    return DefaultAzureCredential()
-
-
 def sha256_hex(data: bytes) -> str:
     """Return the SHA-256 hex digest of ``data``."""
     return hashlib.sha256(data).hexdigest()
 
 
+def _blob_url() -> str:
+    return f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+
+
 async def upload_to_blob_with_sha(blob_path: str, data: bytes, sha: str) -> None:
-    """Upload ``data`` to the raw-documents container, storing ``sha`` as blob metadata.
-
-    The SHA-256 is written as a metadata tag (``sha256`` key) so that future
-    ingestion runs can detect unchanged files without re-downloading from SharePoint.
-
-    Args:
-        blob_path: Path within the container, e.g. ``hr/Leave Policy 2024.pdf``.
-        data:      Raw file bytes to upload.
-        sha:       SHA-256 hex digest of ``data``.
-    """
-    async with AsyncBlobClient(
-        account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
-        credential=blob_credential(),
-    ) as blob_service:
-        container = blob_service.get_container_client(settings.AZURE_STORAGE_CONTAINER_RAW)
-        blob_client = container.get_blob_client(blob_path)
-        await blob_client.upload_blob(
-            data,
-            overwrite=True,
-            metadata={"sha256": sha},
-        )
-        logger.debug(
-            "Uploaded blob: %s (%d bytes) sha256=%s",
-            blob_path, len(data), sha[:12],
-        )
+    """Upload ``data`` to the raw-documents container, storing ``sha`` as blob metadata."""
+    async with DefaultAzureCredential() as cred, AsyncBlobClient(_blob_url(), credential=cred) as svc:
+        blob_client = svc.get_container_client(settings.AZURE_STORAGE_CONTAINER_RAW).get_blob_client(blob_path)
+        await blob_client.upload_blob(data, overwrite=True, metadata={"sha256": sha})
+        logger.debug("Uploaded blob: %s (%d bytes) sha256=%s", blob_path, len(data), sha[:12])
 
 
 async def blob_sha256(blob_path: str) -> str | None:
-    """Read the ``sha256`` metadata tag from an existing blob.
-
-    Returns ``None`` if the blob does not exist or the tag is absent.
-    Errors other than 404 are logged as warnings and also return ``None``
-    so that the caller falls back to a full re-upload rather than crashing.
-
-    Args:
-        blob_path: Path within the raw-documents container.
-    """
+    """Read the ``sha256`` metadata tag from an existing blob, or None if absent/missing."""
     from azure.core.exceptions import ResourceNotFoundError
 
     try:
-        async with AsyncBlobClient(
-            account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
-            credential=blob_credential(),
-        ) as blob_service:
-            container = blob_service.get_container_client(settings.AZURE_STORAGE_CONTAINER_RAW)
-            blob_client = container.get_blob_client(blob_path)
-            props = await blob_client.get_blob_properties()
+        async with DefaultAzureCredential() as cred, AsyncBlobClient(_blob_url(), credential=cred) as svc:
+            props = await svc.get_container_client(settings.AZURE_STORAGE_CONTAINER_RAW).get_blob_client(blob_path).get_blob_properties()
             return props.metadata.get("sha256")
     except ResourceNotFoundError:
         return None
@@ -88,26 +55,12 @@ async def blob_sha256(blob_path: str) -> str | None:
 
 
 async def delete_raw_blob(blob_path: str) -> None:
-    """Delete the raw blob at ``blob_path`` from the raw-documents container.
-
-    Silently ignores 404 errors — the blob may already have been deleted
-    by a previous run or manually.
-
-    Args:
-        blob_path: Full path within the raw-documents container,
-                   e.g. ``hr/FolderA/Leave Policy 2024.pdf``.
-    """
+    """Delete the raw blob at ``blob_path``, silently ignoring 404."""
     from azure.core.exceptions import ResourceNotFoundError
 
     try:
-        async with AsyncBlobClient(
-            account_url=f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
-            credential=blob_credential(),
-        ) as blob_service:
-            await blob_service.get_blob_client(
-                container=settings.AZURE_STORAGE_CONTAINER_RAW,
-                blob=blob_path,
-            ).delete_blob()
+        async with DefaultAzureCredential() as cred, AsyncBlobClient(_blob_url(), credential=cred) as svc:
+            await svc.get_blob_client(container=settings.AZURE_STORAGE_CONTAINER_RAW, blob=blob_path).delete_blob()
             logger.debug("Deleted raw blob: %s", blob_path)
     except ResourceNotFoundError:
         logger.debug("Raw blob already gone: %s", blob_path)
