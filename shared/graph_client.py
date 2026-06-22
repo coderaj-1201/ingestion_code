@@ -77,8 +77,7 @@ class GraphClient:
         else:
             from urllib.parse import quote
             safe_path = "/".join(quote(seg, safe="") for seg in folder_path.strip("/").split("/"))
-            encoded = safe_path.replace("/", ":/") + ":"
-            url = f"{_GRAPH_BASE}/sites/{site_id}/drive/root:/{encoded}/children"
+            url = f"{_GRAPH_BASE}/sites/{site_id}/drive/root:/{safe_path}:/children"
 
         items = []
         async with httpx.AsyncClient(timeout=30) as client:
