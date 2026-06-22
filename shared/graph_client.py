@@ -106,6 +106,24 @@ class GraphClient:
             resp.raise_for_status()
             return resp.content
 
+    async def stream_file(
+        self, site_id: str, drive_id: str, item_id: str
+    ) -> AsyncIterator[bytes]:
+        """Stream file content in 1 MB chunks without buffering the full file in memory.
+
+        Use this instead of download_file for large files (> ~100 MB) to avoid
+        OOM kills in memory-constrained containers.
+        """
+        url = f"{_GRAPH_BASE}/sites/{site_id}/drives/{drive_id}/items/{item_id}/content"
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0),
+            follow_redirects=True,
+        ) as client:
+            async with client.stream("GET", url, headers=await self._headers()) as resp:
+                resp.raise_for_status()
+                async for chunk in resp.aiter_bytes(chunk_size=1024 * 1024):
+                    yield chunk
+
     async def get_item_metadata(self, site_id: str, drive_id: str, item_id: str) -> dict:
         """Get full metadata for a single drive item."""
         url = f"{_GRAPH_BASE}/sites/{site_id}/drives/{drive_id}/items/{item_id}"

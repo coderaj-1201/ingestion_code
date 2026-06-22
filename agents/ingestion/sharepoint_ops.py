@@ -23,7 +23,7 @@ from dataclasses import asdict
 
 from agent_framework import step, workflow
 
-from agents.ingestion.blob_ops import blob_sha256, sha256_hex, upload_to_blob_with_sha
+from agents.ingestion.blob_ops import blob_metadata, upload_stream_to_blob
 from processors.dispatcher import SUPPORTED_EXTENSIONS as _SUPPORTED_EXTENSIONS
 from shared.config import settings
 from shared.graph_client import graph_client
@@ -134,6 +134,7 @@ def item_to_task(
         item_id=item.get("id", ""),
         trigger_type=trigger_type,
         is_delete=is_delete,
+        last_modified=item.get("lastModifiedDateTime", ""),
     )
 
 
@@ -179,18 +180,41 @@ async def ingest_one_file(task: IngestionTask) -> ProcessingTask:
         )
         return processing_task
 
+    # Fast pre-check: if the Graph lastModifiedDateTime hasn't changed, skip the download entirely.
+    # This avoids transferring large files (100 MB – 1+ GB) that haven't been modified.
+    stored = await blob_metadata(task.blob_path)
+    if task.last_modified and stored.get("last_modified") == task.last_modified:
+        logger.info(
+            "Skipping unchanged doc_name=%s (lastModified match)",
+            task.doc_name,
+            extra={"task_id": task.task_id, "doc_name": task.doc_name, "skip_reason": "last_modified_match"},
+        )
+        return ProcessingTask(
+            ingestion_task_id=task.task_id,
+            domain=task.domain,
+            doc_name=task.doc_name,
+            doc_url=task.doc_url,
+            file_type=task.file_type,
+            processed_blob_path="",
+            is_delete=False,
+            file_sha256=stored.get("sha256", ""),
+        )
+
     logger.info(
-        "Downloading doc_name=%s",
+        "Streaming download doc_name=%s",
         task.doc_name,
         extra={"task_id": task.task_id, "doc_name": task.doc_name, "domain": task.domain},
     )
-    file_bytes = await graph_client.download_file(task.site_id, task.drive_id, task.item_id)
+    new_sha = await upload_stream_to_blob(
+        task.blob_path,
+        graph_client.stream_file(task.site_id, task.drive_id, task.item_id),
+        task.last_modified,
+    )
 
-    new_sha = sha256_hex(file_bytes)
-    existing_sha = await blob_sha256(task.blob_path)
-    if existing_sha and existing_sha == new_sha:
+    # Content-based dedup: skip re-processing if bytes are identical despite a timestamp change.
+    if stored.get("sha256") and stored["sha256"] == new_sha:
         logger.info(
-            "Skipping unchanged doc_name=%s sha256=%s (blob tag match)",
+            "Skipping unchanged doc_name=%s sha256=%s (content match)",
             task.doc_name, new_sha[:12],
             extra={"task_id": task.task_id, "doc_name": task.doc_name, "skip_reason": "sha256_match"},
         )
@@ -204,8 +228,6 @@ async def ingest_one_file(task: IngestionTask) -> ProcessingTask:
             is_delete=False,
             file_sha256=new_sha,
         )
-
-    await upload_to_blob_with_sha(task.blob_path, file_bytes, new_sha)
 
     processing_task = ProcessingTask(
         ingestion_task_id=task.task_id,
@@ -228,12 +250,11 @@ async def ingest_one_file(task: IngestionTask) -> ProcessingTask:
 
 @workflow(name="ingestion_workflow")
 async def ingestion_workflow(tasks: list[IngestionTask]) -> dict:
-    """Fan-out ingestion of multiple files, processed one at a time.
+    """Fan-out ingestion of multiple files, capped at 4 concurrent streams.
 
-    Sequential processing (semaphore=1) is required because download_file()
-    buffers the entire file in memory before the blob upload completes. Large
-    files (100-200 MB PPTX/XLSX) trigger an OOM kill when two or more are
-    in-flight simultaneously inside a 1 GiB container.
+    Files are streamed chunk-by-chunk directly to Azure Blob without buffering
+    the full content in memory, so concurrency is limited by network/API
+    throughput rather than RAM. 4 is a safe ceiling for the 1 GiB container.
 
     Args:
         tasks: List of :class:`~shared.models.IngestionTask` objects to process.
@@ -241,7 +262,7 @@ async def ingestion_workflow(tasks: list[IngestionTask]) -> dict:
     Returns:
         Summary dict with ``total``, ``success``, and ``failed`` counts.
     """
-    semaphore = asyncio.Semaphore(1)
+    semaphore = asyncio.Semaphore(4)
 
     async def _bounded(task: IngestionTask):
         async with semaphore:

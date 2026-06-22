@@ -58,6 +58,7 @@ class IngestionTask:
     trigger_type: str      = TriggerType.WEBHOOK
     is_delete: bool        = False
     file_sha256: str       = ""        # SHA-256 hex digest of raw file bytes
+    last_modified: str     = ""        # Graph lastModifiedDateTime (ISO-8601); used for fast dedup
 
 
 @dataclass

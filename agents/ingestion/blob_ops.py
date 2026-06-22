@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from typing import AsyncIterator
 
 from azure.identity.aio import DefaultAzureCredential
 from azure.storage.blob.aio import BlobServiceClient as AsyncBlobClient
@@ -52,6 +53,56 @@ async def blob_sha256(blob_path: str) -> str | None:
     except Exception as exc:
         logger.warning("Could not read blob metadata for %s: %s", blob_path, exc)
         return None
+
+
+async def blob_metadata(blob_path: str) -> dict:
+    """Read sha256 and last_modified metadata from an existing blob.
+
+    Returns an empty dict if the blob doesn't exist yet.
+    """
+    from azure.core.exceptions import ResourceNotFoundError
+
+    try:
+        async with DefaultAzureCredential() as cred, AsyncBlobClient(_blob_url(), credential=cred) as svc:
+            props = await svc.get_container_client(settings.AZURE_STORAGE_CONTAINER_RAW).get_blob_client(blob_path).get_blob_properties()
+            return {
+                "sha256":        props.metadata.get("sha256", ""),
+                "last_modified": props.metadata.get("last_modified", ""),
+            }
+    except ResourceNotFoundError:
+        return {}
+    except Exception as exc:
+        logger.warning("Could not read blob metadata for %s: %s", blob_path, exc)
+        return {}
+
+
+async def upload_stream_to_blob(
+    blob_path: str, stream: AsyncIterator[bytes], last_modified: str
+) -> str:
+    """Stream-upload to blob, computing sha256 on-the-fly. Returns the sha256 hex digest.
+
+    Uses 1 MB block uploads so the full file is never held in memory — safe for
+    files larger than the container's memory limit.
+    """
+    hasher = hashlib.sha256()
+
+    async def _hashing_gen():
+        async for chunk in stream:
+            hasher.update(chunk)
+            yield chunk
+
+    async with DefaultAzureCredential() as cred, AsyncBlobClient(_blob_url(), credential=cred) as svc:
+        blob_client = svc.get_container_client(settings.AZURE_STORAGE_CONTAINER_RAW).get_blob_client(blob_path)
+        await blob_client.upload_blob(
+            _hashing_gen(),
+            overwrite=True,
+            max_single_put_size=4 * 1024 * 1024,  # force block-upload mode for large files
+        )
+        sha = hasher.hexdigest()
+        await blob_client.set_blob_metadata({"sha256": sha, "last_modified": last_modified})
+
+    logger.debug("Streamed blob: %s sha256=%s", blob_path, sha[:12])
+    return sha
 
 
 async def delete_raw_blob(blob_path: str) -> None:
