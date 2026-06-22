@@ -98,30 +98,47 @@ def _delete_prefix(client, container: str, prefix: str) -> None:
 
 # ── AI Search deletion ────────────────────────────────────────────────────────
 def delete_from_search(doc_names: list[str]) -> None:
-    from azure.identity import DefaultAzureCredential
     from azure.search.documents import SearchClient
 
     endpoint = _require("AZURE_SEARCH_ENDPOINT")
     index    = os.getenv("AZURE_SEARCH_INDEX", "idx-rag")
+    api_key  = os.getenv("AZURE_SEARCH_KEY", "").strip()
 
-    search = SearchClient(endpoint=endpoint, index_name=index, credential=DefaultAzureCredential())
+    if api_key:
+        from azure.core.credentials import AzureKeyCredential
+        credential = AzureKeyCredential(api_key)
+    else:
+        from azure.identity import DefaultAzureCredential
+        credential = DefaultAzureCredential()
+
+    search = SearchClient(endpoint=endpoint, index_name=index, credential=credential)
 
     for doc_name in doc_names:
         _delete_doc_chunks(search, doc_name)
 
 
 def _delete_doc_chunks(search: "SearchClient", doc_name: str) -> None:
+    # Strip any leading domain prefix (e.g. "ops/filename.pdf" → "filename.pdf") for
+    # doc_name matching, but keep the full value for doc_path matching.
     escaped = doc_name.replace("'", "''")
-    filt    = f"doc_name eq '{escaped}'"
+    basename = doc_name.split("/")[-1].replace("'", "''")
 
     ids: list[str] = []
-    try:
-        results = search.search(search_text="*", filter=filt, select=["id"], top=1000)
-        for r in results:
-            ids.append(r["id"])
-    except Exception as exc:
-        print(f"[ERR]  Search query failed for {doc_name!r}: {exc}")
-        return
+    for filt in (
+        f"doc_path eq '{escaped}'",
+        f"doc_name eq '{basename}'",
+        f"doc_name eq '{escaped}'",
+    ):
+        try:
+            results = search.search(search_text="*", filter=filt, select=["id"], top=1000)
+            for r in results:
+                ids.append(r["id"])
+        except Exception as exc:
+            print(f"[ERR]  Search query failed for {doc_name!r} (filter={filt!r}): {exc}")
+            return
+        if ids:
+            print(f"[INFO] Matched {len(ids)} chunk(s) using filter: {filt}")
+            break
 
     if not ids:
         print(f"[SKIP] No search chunks found for {doc_name!r}")
