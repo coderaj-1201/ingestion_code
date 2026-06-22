@@ -1,157 +1,183 @@
 """
-Video Parser — Azure AI Content Understanding
-=============================================
+Video Parser — Azure Video Indexer
+====================================
 
-Uses the Azure AI Content Understanding SDK (preview) to extract shot-level
-transcripts and scene descriptions from video files.
+Uses the Azure Video Indexer REST API to extract transcripts from video files.
+Transcript segments are grouped into ~60-second windows and formatted as text
+sections for the RAG pipeline.
 
-Why Content Understanding (not Video Indexer)
----------------------------------------------
-Content Understanding outputs **RAG-ready Markdown** directly — each video shot
-becomes a structured section with transcript + visual description.  Video Indexer
-outputs a JSON metadata blob that needs significant glue code to produce chunks.
-Content Understanding is the correct Azure service for RAG pipelines as of 2025.
+Configuration (environment variables)
+--------------------------------------
+AZURE_VIDEO_INDEXER_SUBSCRIPTION_ID  : Azure subscription ID
+AZURE_VIDEO_INDEXER_RESOURCE_GROUP   : Resource group containing the VI account
+AZURE_VIDEO_INDEXER_ACCOUNT_NAME     : ARM resource name of the VI account
+AZURE_VIDEO_INDEXER_ACCOUNT_ID       : Video Indexer account GUID (from VI portal)
+AZURE_VIDEO_INDEXER_LOCATION         : Azure region, e.g. ``eastus``
 
-Pipeline
---------
-1. **Analyzer setup** (one-time per process) — ``_get_or_create_analyzer()``
-   creates an Azure backend analyzer from ``resources/video_analyzer_template.json``
-   and caches its ID.  Subsequent calls reuse the same analyzer.
-
-2. **File upload** — video bytes are written to a ``NamedTemporaryFile`` so the
-   SDK can submit them to the Content Understanding API.
-
-3. **Analysis** — ``client.begin_analyze`` submits the job; the SDK polls until
-   the result is available.
-
-4. **Chunk production** — the Markdown result is split on ``# Shot`` headers.
-   Each shot becomes a parent + child chunk pair (same pattern as other parsers).
-
-Configuration
--------------
-Set ``CONTENT_UNDERSTANDING_ENDPOINT`` in ``.env`` or environment.
-Auth uses ``DefaultAzureCredential`` — no API key required.
-The container app's Managed Identity needs the ``Cognitive Services User`` role
-on the Azure AI Services resource.
+Auth uses ``DefaultAzureCredential`` → ARM token → Video Indexer access token.
+Assign ``Contributor`` to the Managed Identity on the Video Indexer account.
 
 Supported formats: MP4, MOV, AVI, MKV, FLV, WMV, MXF.
-Free tier: 10 hours/month — enough for dev/test.
-Pricing (S1): ~$0.035 per video minute.
+Package required: httpx>=0.27.0 (already in requirements.txt)
 """
 from __future__ import annotations
 
 import logging
 import os
-import re
-import tempfile
-import threading
+import time
 from datetime import datetime, timezone
-from pathlib import Path
 from uuid import uuid4
 
-from shared.config import settings
+import httpx
+from azure.identity import DefaultAzureCredential
+
 from shared.models import ChunkType, RawChunk
 
 logger = logging.getLogger(__name__)
 
-# Path to the analyzer template shipped with this repo.
-_TEMPLATE_PATH = Path(__file__).parent.parent / "resources" / "video_analyzer_template.json"
-
-# Module-level analyzer ID cache — created once per process, reused for all
-# subsequent calls.  Protected by a lock so concurrent first-calls don't race.
-_ANALYZER_ID: str | None = None
-_ANALYZER_LOCK = threading.Lock()
-
-# Minimum characters in a shot section to produce a child chunk.
-_MIN_SHOT_CHARS = 60
-
-# Regex that matches the Markdown shot headers emitted by Content Understanding.
-# Examples: "# Shot 0:00 - 0:45", "## Shot 1:30 - 2:15"
-_SHOT_HEADER_RE = re.compile(r"^#{1,3}\s+Shot\b", re.MULTILINE | re.IGNORECASE)
+_VI_BASE = "https://api.videoindexer.ai"
+_POLL_INTERVAL = 15        # seconds between index-state polls
+_SEGMENT_WINDOW = 60.0     # seconds — group transcript lines into ~1-minute chunks
 
 
-def _get_client():
-    """Construct an AzureContentUnderstandingClient using DefaultAzureCredential.
+# ── Auth & API helpers ────────────────────────────────────────────────────────
 
-    Raises RuntimeError if CONTENT_UNDERSTANDING_ENDPOINT is not configured.
-    """
-    from azure.ai.contentunderstanding import AzureContentUnderstandingClient
-    from azure.identity import DefaultAzureCredential
-
-    endpoint = str(settings.CONTENT_UNDERSTANDING_ENDPOINT or "")
-    if not endpoint:
-        raise RuntimeError(
-            "CONTENT_UNDERSTANDING_ENDPOINT is not configured. "
-            "Set it in .env to enable video parsing."
-        )
-    return AzureContentUnderstandingClient(
-        endpoint=endpoint.rstrip("/"),
-        credential=DefaultAzureCredential(),
-    )
-
-
-def _get_or_create_analyzer() -> str:
-    """Return the cached analyzer ID, creating it on the first call.
-
-    The analyzer is an Azure backend resource that must exist before
-    ``begin_analyze`` can be called.  Creation is idempotent — if the
-    analyzer already exists the API returns it unchanged.
-
-    This function is thread-safe: a lock prevents concurrent creation
-    races when multiple files are processed simultaneously.
-    """
-    global _ANALYZER_ID
-    if _ANALYZER_ID:
-        return _ANALYZER_ID
-
-    with _ANALYZER_LOCK:
-        if _ANALYZER_ID:
-            return _ANALYZER_ID
-
-        client = _get_client()
-        analyzer_id = "rag-video-analyzer"
-
-        logger.info("Creating Content Understanding video analyzer id=%s", analyzer_id)
-        response = client.begin_create_analyzer(
-            analyzer_id=analyzer_id,
-            analyzer_template_path=str(_TEMPLATE_PATH),
-        )
-        client.poll_result(response)
-        logger.info("Video analyzer ready id=%s", analyzer_id)
-
-        _ANALYZER_ID = analyzer_id
-    return _ANALYZER_ID
-
-
-def _split_shots(markdown: str) -> list[tuple[str, str]]:
-    """Split Content Understanding Markdown output into (header, body) pairs.
-
-    Each shot section starts with a ``# Shot`` header.  If no shot headers are
-    found the entire Markdown is returned as a single unnamed section.
+def _get_access_token() -> tuple[str, str, str]:
+    """Exchange ARM credentials for a Video Indexer access token.
 
     Returns:
-        List of ``(shot_header, shot_body)`` tuples with stripped whitespace.
+        (location, account_id, access_token)
     """
-    parts = _SHOT_HEADER_RE.split(markdown)
-    headers = _SHOT_HEADER_RE.findall(markdown)
+    sub_id      = os.environ["AZURE_VIDEO_INDEXER_SUBSCRIPTION_ID"]
+    rg          = os.environ["AZURE_VIDEO_INDEXER_RESOURCE_GROUP"]
+    account     = os.environ["AZURE_VIDEO_INDEXER_ACCOUNT_NAME"]
+    location    = os.environ["AZURE_VIDEO_INDEXER_LOCATION"]
+    account_id  = os.environ["AZURE_VIDEO_INDEXER_ACCOUNT_ID"]
 
-    if not headers:
-        return [("Shot 0:00", markdown.strip())]
+    arm_token = DefaultAzureCredential().get_token("https://management.azure.com/.default").token
 
-    shots: list[tuple[str, str]] = []
-    for header, body in zip(headers, parts[1:]):
-        # Re-attach the header prefix that was consumed by the split.
-        first_line_end = body.find("\n")
-        if first_line_end != -1:
-            shot_title = (header + body[:first_line_end]).strip("#").strip()
-            shot_body  = body[first_line_end:].strip()
-        else:
-            shot_title = (header + body).strip("#").strip()
-            shot_body  = ""
-        shots.append((shot_title, shot_body or shot_title))
+    url = (
+        f"https://management.azure.com/subscriptions/{sub_id}"
+        f"/resourceGroups/{rg}"
+        f"/providers/Microsoft.VideoIndexer/accounts/{account}"
+        f"/generateAccessToken?api-version=2024-01-01"
+    )
+    resp = httpx.post(
+        url,
+        headers={"Authorization": f"Bearer {arm_token}"},
+        json={"permissionType": "Contributor", "scope": "Account"},
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    return location, account_id, resp.json()["accessToken"]
 
-    return shots
 
+def _upload_video(
+    location: str, account_id: str, token: str, file_bytes: bytes, doc_name: str
+) -> str:
+    """Upload video bytes to Video Indexer; return the assigned video ID."""
+    url = f"{_VI_BASE}/{location}/Accounts/{account_id}/Videos"
+    resp = httpx.post(
+        url,
+        params={"accessToken": token, "name": doc_name, "privacy": "Private"},
+        files={"file": (doc_name, file_bytes, "application/octet-stream")},
+        timeout=600.0,
+    )
+    resp.raise_for_status()
+    return resp.json()["id"]
+
+
+def _wait_for_index(
+    location: str, account_id: str, video_id: str, token: str
+) -> dict:
+    """Poll the Video Indexer index endpoint until the video is processed."""
+    url = f"{_VI_BASE}/{location}/Accounts/{account_id}/Videos/{video_id}/Index"
+    while True:
+        resp = httpx.get(url, params={"accessToken": token}, timeout=30.0)
+        resp.raise_for_status()
+        data = resp.json()
+        state = data.get("state", "")
+        if state == "Processed":
+            return data
+        if state in ("Failed", "Quarantined"):
+            raise RuntimeError(f"Video Indexer: video_id={video_id} ended with state={state}")
+        logger.debug("Video Indexer: video_id=%s state=%s — waiting %ds", video_id, state, _POLL_INTERVAL)
+        time.sleep(_POLL_INTERVAL)
+
+
+def _delete_video(location: str, account_id: str, video_id: str, token: str) -> None:
+    """Remove the video from Video Indexer storage after processing."""
+    url = f"{_VI_BASE}/{location}/Accounts/{account_id}/Videos/{video_id}"
+    try:
+        httpx.delete(url, params={"accessToken": token}, timeout=30.0).raise_for_status()
+        logger.debug("Video Indexer: deleted video_id=%s", video_id)
+    except Exception as exc:
+        logger.warning("Video Indexer: could not delete video_id=%s — %s", video_id, exc)
+
+
+# ── Transcript → sections ─────────────────────────────────────────────────────
+
+def _fmt_ts(seconds: float) -> str:
+    """Format seconds as M:SS or H:MM:SS."""
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _parse_secs(ts: str) -> float:
+    """Parse ``H:MM:SS`` or ``H:MM:SS.mmm`` to seconds."""
+    try:
+        parts = ts.split(":")
+        secs = float(parts[-1]) + int(parts[-2]) * 60
+        if len(parts) == 3:
+            secs += int(parts[0]) * 3600
+        return secs
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def _transcript_to_sections(index: dict) -> list[tuple[str, str]]:
+    """Group transcript segments into ~_SEGMENT_WINDOW second windows.
+
+    Returns:
+        List of ``(section_heading, transcript_text)`` pairs.
+        Heading format: ``"0:00 - 1:00"``.
+    """
+    try:
+        transcript: list[dict] = index["videos"][0]["insights"]["transcript"]
+    except (KeyError, IndexError, TypeError):
+        return [("0:00", "[No transcript available]")]
+
+    sections: list[tuple[str, str]] = []
+    window_start = 0.0
+    window_end   = 0.0
+    window_lines: list[str] = []
+
+    for seg in transcript:
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+        instances = seg.get("instances", [{}])
+        start_secs = _parse_secs(instances[0].get("adjustedStart", "0:00:00"))
+        end_secs   = _parse_secs(instances[0].get("adjustedEnd",   "0:00:00"))
+
+        if start_secs - window_start >= _SEGMENT_WINDOW and window_lines:
+            heading = f"{_fmt_ts(window_start)} - {_fmt_ts(window_end)}"
+            sections.append((heading, " ".join(window_lines)))
+            window_lines = []
+            window_start = start_secs
+
+        window_lines.append(text)
+        window_end = max(window_end, end_secs)
+
+    if window_lines:
+        heading = f"{_fmt_ts(window_start)} - {_fmt_ts(window_end)}"
+        sections.append((heading, " ".join(window_lines)))
+
+    return sections or [("0:00", "[No transcript available]")]
+
+
+# ── Public parser ─────────────────────────────────────────────────────────────
 
 def parse_video(
     file_bytes: bytes,
@@ -160,11 +186,9 @@ def parse_video(
     domain: str,
     blob_path: str,
 ) -> list[RawChunk]:
-    """Parse a video file via Azure AI Content Understanding and return RawChunks.
+    """Parse a video via Azure Video Indexer and return RawChunks.
 
-    Each video shot produces a parent chunk (full shot text) and a child chunk
-    (same content, embedded for similarity search).  Short shots that produce
-    less than ``_MIN_SHOT_CHARS`` characters are merged with the next shot.
+    Each ~60-second transcript window produces a parent + child chunk pair.
 
     Args:
         file_bytes: Raw video bytes (MP4, MOV, AVI, MKV, FLV, WMV, MXF).
@@ -174,57 +198,30 @@ def parse_video(
         blob_path:  Path in the raw-documents blob container.
 
     Returns:
-        list[RawChunk] — (parent + child) × number_of_shots.
+        list[RawChunk] — (parent + child) × number_of_sections.
 
     Raises:
-        RuntimeError: If Azure Content Understanding config vars are missing.
+        RuntimeError: If any required AZURE_VIDEO_INDEXER_* env vars are missing,
+                      or if Video Indexer reports a failure state.
     """
     ingested_at = datetime.now(timezone.utc).isoformat()
-    suffix      = Path(doc_name).suffix or ".mp4"
+    title       = doc_name.rsplit(".", 1)[0].replace("_", " ").replace("-", " ")
 
-    # Write to a temp file so the SDK can read it from disk.
-    tmp_path = ""
+    location, account_id, token = _get_access_token()
+
+    logger.info(
+        "Video Indexer: uploading doc_name=%s size=%dMB",
+        doc_name, len(file_bytes) // (1024 * 1024),
+    )
+    video_id = _upload_video(location, account_id, token, file_bytes, doc_name)
+
     try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(file_bytes)
-            tmp_path = tmp.name
-
-        analyzer_id = _get_or_create_analyzer()
-        client      = _get_client()
-
-        logger.info(
-            "Content Understanding: submitting doc_name=%s size=%dMB analyzer=%s",
-            doc_name, len(file_bytes) // (1024 * 1024), analyzer_id,
-        )
-
-        response = client.begin_analyze(
-            analyzer_id=analyzer_id,
-            input_source=tmp_path,
-        )
-        result = client.poll_result(response)
-
+        logger.info("Video Indexer: polling video_id=%s", video_id)
+        index = _wait_for_index(location, account_id, video_id, token)
     finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        _delete_video(location, account_id, video_id, token)
 
-    # Extract the Markdown from the API result.
-    try:
-        markdown: str = result["result"]["contents"][0]["markdown"]
-    except (KeyError, IndexError, TypeError) as exc:
-        logger.warning(
-            "Unexpected Content Understanding response for doc_name=%s: %s",
-            doc_name, exc,
-        )
-        markdown = str(result)
-
-    if not markdown.strip():
-        logger.warning("Content Understanding returned empty Markdown for doc_name=%s", doc_name)
-        markdown = "[No content extracted from video]"
-
-    shots  = _split_shots(markdown)
-    chunks: list[RawChunk] = []
-
-    title = doc_name.rsplit(".", 1)[0].replace("_", " ").replace("-", " ")
+    sections = _transcript_to_sections(index)
 
     base = dict(
         domain=domain,
@@ -237,48 +234,44 @@ def parse_video(
         title=title,
     )
 
-    for shot_idx, (shot_header, shot_body) in enumerate(shots):
-        if not shot_body.strip():
+    chunks: list[RawChunk] = []
+    for idx, (heading, body) in enumerate(sections):
+        if not body.strip():
             continue
-
         parent_id = str(uuid4())
-
-        # Parent — full shot text, no vector; provides context for retrieval.
+        # Parent — full section text, no vector; provides retrieval context.
         chunks.append(RawChunk(
             chunk_id=parent_id,
             parent_id="",
             chunk_type=ChunkType.PARAGRAPH,
-            content=shot_body,
-            section_heading=shot_header,
-            page_number=shot_idx + 1,
+            content=body,
+            section_heading=heading,
+            page_number=idx + 1,
+            **base,
+        ))
+        # Child — same content, embedded for similarity search.
+        chunks.append(RawChunk(
+            chunk_id=str(uuid4()),
+            parent_id=parent_id,
+            chunk_type=ChunkType.PARAGRAPH,
+            content=body,
+            section_heading=heading,
+            page_number=idx + 1,
             **base,
         ))
 
-        # Child — same content, embedded for similarity search.
-        if len(shot_body) >= _MIN_SHOT_CHARS:
-            chunks.append(RawChunk(
-                chunk_id=str(uuid4()),
-                parent_id=parent_id,
-                chunk_type=ChunkType.PARAGRAPH,
-                content=shot_body,
-                section_heading=shot_header,
-                page_number=shot_idx + 1,
-                **base,
-            ))
-
     if not chunks:
-        # Safety net: emit one parent+child from the full Markdown if shot
-        # splitting produced nothing useful.
         parent_id = str(uuid4())
+        fallback  = "[No content extracted from video]"
         chunks = [
             RawChunk(chunk_id=parent_id, parent_id="", chunk_type=ChunkType.PARAGRAPH,
-                     content=markdown, **base),
+                     content=fallback, **base),
             RawChunk(chunk_id=str(uuid4()), parent_id=parent_id, chunk_type=ChunkType.PARAGRAPH,
-                     content=markdown, **base),
+                     content=fallback, **base),
         ]
 
     logger.info(
-        "Video parsed: %s → %d shots → %d chunks",
-        doc_name, len(shots), len(chunks),
+        "Video parsed: %s → %d sections → %d chunks",
+        doc_name, len(sections), len(chunks),
     )
     return chunks

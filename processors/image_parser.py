@@ -1,110 +1,68 @@
 """
-Image Parser — Azure AI Vision
-==============================
+Image Parser — Azure Document Intelligence
+==========================================
 
-Uses the Azure AI Vision Image Analysis 4.0 SDK to extract content from image
-files. Unlike the GPT-4o Vision path this service is purpose-built for OCR and
-image captioning, runs synchronously, and is significantly cheaper per image.
-
-Strategy
---------
-1. Submit raw image bytes to ``ImageAnalysisClient.analyze`` requesting the
-   ``READ`` (OCR) and ``CAPTION`` visual features.
-2. ``READ`` returns the full text content of the image (documents, screenshots,
-   printed text, handwriting).  ``CAPTION`` returns a one-sentence description
-   of the scene — used as fallback content when no text is found.
-3. Produce a two-level chunk hierarchy (same pattern as all other parsers):
-   - **Parent chunk** (``parent_id=""``) — full OCR text or caption; no vector.
-   - **Child chunks** (``parent_id=<parent_id>``) — one per text line group;
-     embedded for similarity search.
+Uses the Azure AI Document Intelligence ``prebuilt-read`` model to extract
+text and layout from image files.  The model returns content as Markdown
+(headings, paragraphs, tables) which is passed directly into RawChunks for
+the RAG pipeline.
 
 Configuration
 -------------
-Set ``AZURE_VISION_ENDPOINT`` in ``.env`` or environment.
+Set ``AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`` in ``.env`` or environment.
 Auth uses ``DefaultAzureCredential`` — no API key required.
-The container app's Managed Identity needs the ``Cognitive Services User`` role
-on the Azure AI Vision resource.
+Assign the ``Cognitive Services User`` role to the Managed Identity on the
+Document Intelligence resource.
 
-Cost: ~$0.0015 per image (Read + Caption, as of 2025 pricing).
-
-Supported formats: PNG, JPEG, GIF, WEBP, BMP, TIFF.
-File size limit: 20 MB (enforced by the API).
+Supported formats: JPEG, PNG, BMP, TIFF, HEIF.
+File size limit: 500 MB (enforced by the API).
+Package required: azure-ai-documentintelligence>=1.0.0
 """
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from shared.config import settings
 from shared.models import ChunkType, RawChunk
 
 logger = logging.getLogger(__name__)
 
-# Azure AI Vision hard limit.
-_MAX_IMAGE_BYTES = 20 * 1024 * 1024
-
-# Group text lines into paragraphs when there is a blank-line gap in the OCR
-# output.  Lines shorter than this are joined to the next line.
 _MIN_CHILD_CHARS = 40
 
 
-def _get_vision_client():
-    """Construct an ImageAnalysisClient using DefaultAzureCredential.
-
-    Raises RuntimeError if AZURE_VISION_ENDPOINT is not configured.
-    """
-    from azure.ai.vision.imageanalysis import ImageAnalysisClient
+def _get_client():
+    from azure.ai.documentintelligence import DocumentIntelligenceClient
     from azure.identity import DefaultAzureCredential
 
-    endpoint = str(settings.AZURE_VISION_ENDPOINT or "")
+    endpoint = os.environ.get("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", "")
     if not endpoint:
         raise RuntimeError(
-            "AZURE_VISION_ENDPOINT is not configured. "
+            "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT is not set. "
             "Set it in .env to enable image parsing."
         )
-    return ImageAnalysisClient(
-        endpoint=endpoint.rstrip("/"),
-        credential=DefaultAzureCredential(),
-    )
+    return DocumentIntelligenceClient(endpoint.rstrip("/"), DefaultAzureCredential())
 
 
-def _split_into_groups(text: str) -> list[str]:
-    """Split OCR text into logical paragraph groups.
-
-    Lines separated by a blank line form a group.  Short lines (< _MIN_CHILD_CHARS)
-    are merged with the following non-blank line to avoid producing trivial
-    one-word child chunks.
-    """
+def _split_paragraphs(markdown: str) -> list[str]:
+    """Split markdown into non-trivial paragraph groups separated by blank lines."""
     groups: list[str] = []
     current: list[str] = []
 
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if not stripped:
             if current:
                 groups.append(" ".join(current))
                 current = []
         else:
-            current.append(line)
+            current.append(stripped)
 
     if current:
         groups.append(" ".join(current))
 
-    # Merge groups that are too short into their successor.
-    merged: list[str] = []
-    carry = ""
-    for g in groups:
-        combined = (carry + " " + g).strip() if carry else g
-        if len(combined) < _MIN_CHILD_CHARS and groups.index(g) < len(groups) - 1:
-            carry = combined
-        else:
-            merged.append(combined)
-            carry = ""
-    if carry:
-        merged.append(carry)
-
-    return [m for m in merged if m]
+    return [g for g in groups if len(g) >= _MIN_CHILD_CHARS]
 
 
 def parse_image(
@@ -114,10 +72,10 @@ def parse_image(
     domain: str,
     blob_path: str,
 ) -> list[RawChunk]:
-    """Parse an image file via Azure AI Vision and return a list of RawChunks.
+    """Parse an image via Azure Document Intelligence and return RawChunks.
 
     Args:
-        file_bytes: Raw image bytes (PNG, JPEG, GIF, WEBP, BMP, TIFF).
+        file_bytes: Raw image bytes (JPEG, PNG, BMP, TIFF, HEIF).
         doc_name:   File name, e.g. ``"org_chart.png"``.
         doc_url:    SharePoint URL to the file.
         domain:     Business domain (``"hr"``, ``"ops"``, etc.).
@@ -127,43 +85,28 @@ def parse_image(
         list[RawChunk] — 1 parent + N child chunks.
 
     Raises:
-        ValueError:   If the file exceeds 20 MB.
-        RuntimeError: If Azure Vision config vars are missing.
+        RuntimeError: If AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT is not set.
     """
-    from azure.ai.vision.imageanalysis.models import VisualFeatures
-
-    if len(file_bytes) > _MAX_IMAGE_BYTES:
-        raise ValueError(
-            f"{doc_name} is {len(file_bytes) / 1024 / 1024:.1f} MB — "
-            "exceeds the 20 MB Azure AI Vision limit."
-        )
+    from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 
     ingested_at = datetime.now(timezone.utc).isoformat()
-    client = _get_vision_client()
+    client = _get_client()
 
     logger.info(
-        "Azure AI Vision: analysing doc_name=%s size=%dKB",
+        "Document Intelligence: analysing doc_name=%s size=%dKB",
         doc_name, len(file_bytes) // 1024,
     )
 
-    result = client.analyze(
-        image_data=file_bytes,
-        visual_features=[VisualFeatures.READ, VisualFeatures.CAPTION],
+    poller = client.begin_analyze_document(
+        "prebuilt-read",
+        analyze_request=AnalyzeDocumentRequest(base64_source=file_bytes),
+        output_content_format="markdown",
     )
+    result = poller.result()
 
-    # Prefer OCR text; fall back to caption for purely visual images.
-    ocr_text = result.read.content.strip() if result.read and result.read.content else ""
-    caption   = result.caption.text.strip() if result.caption and result.caption.text else ""
-
-    if ocr_text:
-        primary_content = ocr_text
-        title = doc_name
-    elif caption:
-        primary_content = caption
-        title = doc_name
-    else:
-        primary_content = "[No text or visual content detected]"
-        title = doc_name
+    markdown = (result.content or "").strip()
+    if not markdown:
+        markdown = "[No content extracted]"
 
     chunks: list[RawChunk] = []
     parent_id = str(uuid4())
@@ -176,42 +119,39 @@ def parse_image(
         file_type="image",
         blob_path=blob_path,
         ingested_at=ingested_at,
-        title=title,
+        title=doc_name,
     )
 
-    # Parent — full text, no vector; used to supply retrieval context.
+    # Parent — full markdown, no vector; provides retrieval context.
     chunks.append(RawChunk(
         chunk_id=parent_id,
         parent_id="",
         chunk_type=ChunkType.PARAGRAPH,
-        content=primary_content,
+        content=markdown,
         **base,
     ))
 
-    # Children — one per paragraph group, embedded for similarity search.
-    groups = _split_into_groups(ocr_text) if ocr_text else ([caption] if caption else [])
-    for idx, group in enumerate(groups):
-        if len(group) < _MIN_CHILD_CHARS:
-            continue
+    # Children — one per paragraph, embedded for similarity search.
+    paragraphs = _split_paragraphs(markdown)
+    for idx, para in enumerate(paragraphs):
         chunks.append(RawChunk(
             chunk_id=str(uuid4()),
             parent_id=parent_id,
             chunk_type=ChunkType.PARAGRAPH,
-            content=group,
+            content=para,
             page_number=idx + 1,
             **base,
         ))
 
-    # If no group passed the length gate, emit one child from the full content
-    # so every parent always has at least one embedded child.
-    if len(chunks) == 1 and primary_content:
+    # Guarantee at least one embedded child per parent.
+    if len(chunks) == 1:
         chunks.append(RawChunk(
             chunk_id=str(uuid4()),
             parent_id=parent_id,
             chunk_type=ChunkType.PARAGRAPH,
-            content=primary_content,
+            content=markdown,
             **base,
         ))
 
-    logger.info("Image parsed: %s → %d chunks (ocr_len=%d)", doc_name, len(chunks), len(ocr_text))
+    logger.info("Image parsed: %s → %d chunks", doc_name, len(chunks))
     return chunks
