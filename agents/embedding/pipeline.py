@@ -169,9 +169,20 @@ async def run_embedding(task: dict) -> dict:
             doc["content_vector"] = []
             parent_docs.append(doc)
 
-        parent_results = await asyncio.to_thread(
-            get_search_client().upload_documents, parent_docs
-        )
+        try:
+            parent_results = await asyncio.to_thread(
+                get_search_client().upload_documents, parent_docs
+            )
+        except Exception as exc:
+            if "doc_path" in str(exc):
+                logger.debug("Index missing doc_path field — retrying parent chunks without it")
+                for d in parent_docs:
+                    d.pop("doc_path", None)
+                parent_results = await asyncio.to_thread(
+                    get_search_client().upload_documents, parent_docs
+                )
+            else:
+                raise
         check_upload_results(parent_results, f"parent chunks for {doc_name}")
         logger.debug("Uploaded %d parent chunks for doc_name=%s", len(parent_docs), doc_name)
 

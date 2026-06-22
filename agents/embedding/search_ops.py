@@ -88,7 +88,18 @@ async def upload_to_search(
             doc["content_vector"] = vector
             docs.append(doc)
 
-        results = await asyncio.to_thread(search.upload_documents, docs)
+        try:
+            results = await asyncio.to_thread(search.upload_documents, docs)
+        except Exception as exc:
+            if "doc_path" in str(exc):
+                # Index predates the doc_path field — strip it and retry.
+                logger.debug("Index missing doc_path field — retrying without it")
+                for d in docs:
+                    d.pop("doc_path", None)
+                results = await asyncio.to_thread(search.upload_documents, docs)
+            else:
+                raise
+
         succeeded = sum(1 for r in results if r.succeeded)
         failed = sum(1 for r in results if not r.succeeded)
         total += succeeded
