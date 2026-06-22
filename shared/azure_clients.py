@@ -25,6 +25,13 @@ def _credential() -> DefaultAzureCredential:
     return DefaultAzureCredential()
 
 
+def _get_token_provider():
+    from azure.identity import get_bearer_token_provider
+    return get_bearer_token_provider(
+        DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+    )
+
+
 @lru_cache(maxsize=1)
 def get_foundry_client() -> AIProjectClient:
     """Return a cached Azure AI Foundry project client."""
@@ -36,7 +43,17 @@ def get_foundry_client() -> AIProjectClient:
 
 @lru_cache(maxsize=1)
 def get_openai_client() -> AzureOpenAI:
-    """Return a cached Azure OpenAI client sourced from the Foundry project."""
+    """Return a cached Azure OpenAI client.
+
+    Uses AZURE_OPENAI_ENDPOINT directly when set (avoids Foundry routing).
+    Falls back to the Foundry project client otherwise.
+    """
+    if settings.AZURE_OPENAI_ENDPOINT:
+        return AzureOpenAI(
+            azure_endpoint=str(settings.AZURE_OPENAI_ENDPOINT),
+            azure_ad_token_provider=_get_token_provider(),
+            api_version=settings.AZURE_OPENAI_API_VERSION,
+        )
     return get_foundry_client().get_openai_client()
 
 

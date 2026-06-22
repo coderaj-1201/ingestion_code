@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_VERSION: str           = "2024-08-01-preview"
     # Light LLM for page cleaning + table serialisation — gpt-4o-mini or phi-3-mini
     AZURE_OPENAI_LIGHT_LLM_DEPLOYMENT: str  = "gpt-4.1-mini"
+    # Direct Azure OpenAI endpoint (optional). When set, get_openai_client() builds
+    # AzureOpenAI directly instead of going through the Foundry project client.
+    # Format: https://<resource-name>.openai.azure.com/
+    AZURE_OPENAI_ENDPOINT: AnyHttpUrl | None = None
 
     # ── Azure AI Vision (image parsing) ───────────────────────────────────────
     # Required to enable image parsing (PNG, JPEG, GIF, WEBP, BMP, TIFF).
