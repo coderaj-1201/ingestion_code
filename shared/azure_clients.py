@@ -16,20 +16,12 @@ from azure.identity import DefaultAzureCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
 from azure.storage.blob import BlobServiceClient
-from openai import AzureOpenAI
 
 from shared.config import settings
 
 
 def _credential() -> DefaultAzureCredential:
     return DefaultAzureCredential()
-
-
-def _get_token_provider():
-    from azure.identity import get_bearer_token_provider
-    return get_bearer_token_provider(
-        DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
-    )
 
 
 @lru_cache(maxsize=1)
@@ -42,17 +34,22 @@ def get_foundry_client() -> AIProjectClient:
 
 
 @lru_cache(maxsize=1)
-def get_openai_client() -> AzureOpenAI:
-    """Return a cached Azure OpenAI client.
+def get_openai_client():
+    """Return a cached OpenAI-compatible client for Azure AI Foundry inference.
 
-    Uses AZURE_OPENAI_ENDPOINT directly when set (avoids Foundry routing).
+    When AZURE_OPENAI_ENDPOINT is set (e.g. https://<resource>.services.ai.azure.com/openai/v1),
+    constructs an OpenAI client with a bearer token against that base URL.
     Falls back to the Foundry project client otherwise.
     """
     if settings.AZURE_OPENAI_ENDPOINT:
-        return AzureOpenAI(
-            azure_endpoint=str(settings.AZURE_OPENAI_ENDPOINT),
-            azure_ad_token_provider=_get_token_provider(),
-            api_version=settings.AZURE_OPENAI_API_VERSION,
+        from openai import OpenAI
+        from azure.identity import get_bearer_token_provider
+        token_provider = get_bearer_token_provider(
+            DefaultAzureCredential(), "https://ai.azure.com/.default"
+        )
+        return OpenAI(
+            base_url=str(settings.AZURE_OPENAI_ENDPOINT),
+            api_key=token_provider,
         )
     return get_foundry_client().get_openai_client()
 
