@@ -58,6 +58,15 @@ def _is_retryable_llm_error(exc: BaseException) -> bool:
         return exc.status_code >= 500
     return False
 
+
+def _is_content_filter_error(exc: BaseException) -> bool:
+    """Return True if the exception is an Azure content filter rejection."""
+    from openai import BadRequestError
+    if isinstance(exc, BadRequestError):
+        body = getattr(exc, "body", None) or {}
+        return body.get("code") == "content_filter" or "content_filter" in str(exc)
+    return False
+
 _LLM_RETRY = retry(
     retry=retry_if_exception(_is_retryable_llm_error),
     wait=wait_exponential(multiplier=1, min=2, max=30),
@@ -81,23 +90,29 @@ def _llm_clean_page(raw_text: str, page_num: int) -> str:
         return text
 
     client = get_openai_client()
-    resp = client.chat.completions.create(
-        model=settings.AZURE_OPENAI_LIGHT_LLM_DEPLOYMENT,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a document cleaning assistant. "
-                    "Fix broken hyphenation at line-ends, remove repeated artefacts, "
-                    "normalise whitespace. Return ONLY the cleaned text, nothing else."
-                ),
-            },
-            {"role": "user", "content": f"Page {page_num}:\n\n{text[:3000]}"},
-        ],
-        temperature=0,
-        max_tokens=1500,
-        timeout=30,
-    )
+    try:
+        resp = client.chat.completions.create(
+            model=settings.AZURE_OPENAI_LIGHT_LLM_DEPLOYMENT,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a document cleaning assistant. "
+                        "Fix broken hyphenation at line-ends, remove repeated artefacts, "
+                        "normalise whitespace. Return ONLY the cleaned text, nothing else."
+                    ),
+                },
+                {"role": "user", "content": f"Page {page_num}:\n\n{text[:3000]}"},
+            ],
+            temperature=0,
+            max_tokens=1500,
+            timeout=30,
+        )
+    except Exception as exc:
+        if _is_content_filter_error(exc):
+            logger.debug("Content filter on page %d — using raw text", page_num)
+            return text
+        raise
     content = resp.choices[0].message.content
     return content.strip() if content else text
 
@@ -113,26 +128,32 @@ def _llm_serialise_table(table_markdown: str, context_heading: str) -> str:
         return ""
 
     client = get_openai_client()
-    resp = client.chat.completions.create(
-        model=settings.AZURE_OPENAI_LIGHT_LLM_DEPLOYMENT,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Convert this table into 2–5 clear natural language sentences "
-                    "that capture all key data. Be factual and complete. "
-                    "Return ONLY the sentences, no preamble."
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"Section: {context_heading}\n\nTable:\n{table_markdown}",
-            },
-        ],
-        temperature=0,
-        max_tokens=400,
-        timeout=30,
-    )
+    try:
+        resp = client.chat.completions.create(
+            model=settings.AZURE_OPENAI_LIGHT_LLM_DEPLOYMENT,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Convert this table into 2–5 clear natural language sentences "
+                        "that capture all key data. Be factual and complete. "
+                        "Return ONLY the sentences, no preamble."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Section: {context_heading}\n\nTable:\n{table_markdown}",
+                },
+            ],
+            temperature=0,
+            max_tokens=400,
+            timeout=30,
+        )
+    except Exception as exc:
+        if _is_content_filter_error(exc):
+            logger.debug("Content filter on table — returning raw markdown")
+            return table_markdown
+        raise
     content = resp.choices[0].message.content
     return content.strip() if content else ""
 
