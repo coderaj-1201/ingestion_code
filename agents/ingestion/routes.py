@@ -17,6 +17,8 @@ import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 
+import httpx
+
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 
@@ -326,7 +328,19 @@ async def ingest_folder(req: ManualIngestRequest) -> dict:
         site_id, req.folder_path, req.domain,
     )
 
-    items = await graph_client.list_folder_items(site_id, req.folder_path, req.recursive)
+    try:
+        items = await graph_client.list_folder_items(site_id, req.folder_path, req.recursive)
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status == 404:
+            raise HTTPException(status_code=404, detail=f"Folder not found: {req.folder_path}")
+        if status == 403:
+            raise HTTPException(status_code=403, detail=f"Access denied to folder: {req.folder_path}")
+        raise HTTPException(status_code=502, detail=f"Graph API error {status}: {exc.response.text[:200]}")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Graph API timed out listing folder contents")
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail=f"Graph API connection error: {exc}")
 
     tasks: list[IngestionTask] = []
     for item in items:
