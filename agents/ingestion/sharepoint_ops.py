@@ -228,7 +228,11 @@ async def ingest_one_file(task: IngestionTask) -> ProcessingTask:
 
 @workflow(name="ingestion_workflow")
 async def ingestion_workflow(tasks: list[IngestionTask]) -> dict:
-    """Fan-out ingestion of multiple files, capped at 10 concurrent downloads.
+    """Fan-out ingestion of multiple files, capped at 3 concurrent downloads.
+
+    Concurrency is kept low because each download buffers the full file in
+    memory before uploading to blob; too many simultaneous large files (PPTX,
+    XLSX, PDF) exhaust the container's memory limit and trigger an OOM kill.
 
     Args:
         tasks: List of :class:`~shared.models.IngestionTask` objects to process.
@@ -236,7 +240,7 @@ async def ingestion_workflow(tasks: list[IngestionTask]) -> dict:
     Returns:
         Summary dict with ``total``, ``success``, and ``failed`` counts.
     """
-    semaphore = asyncio.Semaphore(10)
+    semaphore = asyncio.Semaphore(3)
 
     async def _bounded(task: IngestionTask):
         async with semaphore:
