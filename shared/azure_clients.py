@@ -37,9 +37,7 @@ def get_foundry_client() -> AIProjectClient:
 @lru_cache(maxsize=1)
 def get_openai_client() -> AzureOpenAI:
     """Return a cached Azure OpenAI client sourced from the Foundry project."""
-    return get_foundry_client().get_openai_client(
-        api_version=settings.AZURE_OPENAI_API_VERSION
-    )
+    return get_foundry_client().get_openai_client()
 
 
 @lru_cache(maxsize=1)
