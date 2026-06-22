@@ -40,9 +40,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /install /usr/local
 
 # Copy application source
-COPY agents/    agents/
-COPY processors/ processors/
-COPY shared/    shared/
+COPY agents/       agents/
+COPY processors/   processors/
+COPY shared/       shared/
+COPY resources/    resources/
+COPY agent_framework.py .
 
 # Non-root user for security — ACA runs as non-root by default
 RUN addgroup --system app && adduser --system --ingroup app app
