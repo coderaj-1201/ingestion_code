@@ -5,7 +5,6 @@ Public surface re-exported here so callers import from ``agents.ingestion``
 rather than knowing the internal module layout.
 """
 from agents.ingestion.blob_ops import (
-    blob_credential,
     upload_to_blob_with_sha,
     blob_sha256,
     delete_raw_blob,
@@ -23,7 +22,6 @@ from agents.ingestion.sharepoint_ops import (
 )
 
 __all__ = [
-    "blob_credential",
     "upload_to_blob_with_sha",
     "blob_sha256",
     "delete_raw_blob",
