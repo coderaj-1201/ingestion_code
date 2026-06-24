@@ -91,12 +91,13 @@ async def upload_stream_to_blob(
             hasher.update(chunk)
             yield chunk
 
-    async with DefaultAzureCredential() as cred, AsyncBlobClient(_blob_url(), credential=cred) as svc:
+    async with DefaultAzureCredential() as cred, AsyncBlobClient(
+        _blob_url(), credential=cred, max_single_put_size=4 * 1024 * 1024
+    ) as svc:
         blob_client = svc.get_container_client(settings.AZURE_STORAGE_CONTAINER_RAW).get_blob_client(blob_path)
         await blob_client.upload_blob(
             _hashing_gen(),
             overwrite=True,
-            max_single_put_size=4 * 1024 * 1024,  # force block-upload mode for large files
         )
         sha = hasher.hexdigest()
         await blob_client.set_blob_metadata({"sha256": sha, "last_modified": last_modified})
