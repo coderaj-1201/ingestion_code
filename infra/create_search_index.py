@@ -153,6 +153,7 @@ def create_or_skip(endpoint: str, index_name: str, semantic_config: str, credent
         client.get_index(index_name)
         print(f"Index '{index_name}' already exists — skipping creation.")
         print("  Run with --recreate to drop and rebuild (WARNING: deletes all data).")
+        print("  Run with --update to add new fields without touching existing documents.")
         return
     except Exception:
         pass  # index does not exist
@@ -176,6 +177,38 @@ def create_or_skip(endpoint: str, index_name: str, semantic_config: str, credent
         with urllib.request.urlopen(req) as resp:
             result = json.loads(resp.read())
             print(f"Created index '{result['name']}' successfully.")
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode()
+        print(f"HTTP {e.code}: {body_text}", file=sys.stderr)
+        sys.exit(1)
+
+
+def update_index(endpoint: str, index_name: str, semantic_config: str, credential) -> None:
+    """PUT the full schema to add new fields without deleting existing documents.
+
+    Azure AI Search allows adding new non-key fields to a live index — existing
+    documents are untouched and their vectors remain valid. Old documents will
+    have null for newly added fields until they are re-ingested.
+    """
+    import json
+    import urllib.request
+
+    definition = build_index_definition(index_name, semantic_config)
+    url  = f"{endpoint.rstrip('/')}/indexes/{index_name}?api-version=2024-05-01-preview&allowIndexDowntime=false"
+    body = json.dumps(definition).encode()
+
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={**_auth_header(credential), "Content-Type": "application/json"},
+        method="PUT",
+    )
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read())
+            print(f"Updated index '{result['name']}' — existing documents and embeddings preserved.")
+            print("  New fields will be null on existing documents until they are re-ingested.")
     except urllib.error.HTTPError as e:
         body_text = e.read().decode()
         print(f"HTTP {e.code}: {body_text}", file=sys.stderr)
@@ -207,6 +240,8 @@ def main():
     parser = argparse.ArgumentParser(description="Create the RAG AI Search index")
     parser.add_argument("--recreate", action="store_true",
                         help="Drop and rebuild the index (DELETES ALL DATA)")
+    parser.add_argument("--update", action="store_true",
+                        help="Add new fields to existing index (preserves all documents and embeddings)")
     args = parser.parse_args()
 
     endpoint       = os.environ.get("AZURE_SEARCH_ENDPOINT", "").rstrip("/")
@@ -228,6 +263,8 @@ def main():
             print("Aborted.")
             sys.exit(0)
         recreate(endpoint, index_name, semantic_cfg, credential)
+    elif args.update:
+        update_index(endpoint, index_name, semantic_cfg, credential)
     else:
         create_or_skip(endpoint, index_name, semantic_cfg, credential)
 
