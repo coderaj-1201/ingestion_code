@@ -82,7 +82,7 @@ async def sha256_already_indexed(doc_name: str, sha256: str) -> bool:
         return False
 
     # Validate before embedding in a filter expression.
-    if not all(c in "0123456789abcdefABCDEF" for c in sha256):
+    if len(sha256) != 64 or not all(c in "0123456789abcdefABCDEF" for c in sha256):
         logger.warning("Skipping dedup check: malformed sha256 for doc_name=%s", doc_name)
         return False
 
